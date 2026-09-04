@@ -5,7 +5,7 @@ An Omarchy bar widget for OpenCode sessions managed by
 compact attention counts in the right side of the bar:
 
 ```text
-response|permission|idle↓
+total:response|permission|idle:↓
 ```
 
 Install the daemon first, then install the widget:

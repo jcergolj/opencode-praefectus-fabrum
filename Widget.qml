@@ -49,6 +49,7 @@ Panel {
   function countColor(bucket, count) {
     if (!coloredCounts) return count > 0 ? foreground : dim
     if (count <= 0) return dim
+    if (bucket === "all") return foreground
     if (bucket === "response") return responseColor
     if (bucket === "permission") return permissionColor
     if (bucket === "idle") return idleColor
@@ -57,6 +58,7 @@ Panel {
 
   function bucketLabel(bucket) {
     return {
+      all: "all OpenCode sessions",
       response: "waiting for response",
       permission: "waiting for permission",
       idle: "idle"
@@ -217,7 +219,9 @@ Panel {
     tooltipText: root.bucketLabel(bucket)
 
     onPressed: function(button) {
-      if (button === Qt.LeftButton) root.openBucket(bucket)
+      if (button !== Qt.LeftButton) return
+      if (bucket === "all") root.open()
+      else root.openBucket(bucket)
     }
 
     Text {
@@ -261,6 +265,19 @@ Panel {
     spacing: 0
 
     CompactCount {
+      bucket: "all"
+      value: String(root.countFor("sessions"))
+    }
+
+    Text {
+      text: ":"
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      anchors.verticalCenter: parent.verticalCenter
+    }
+
+    CompactCount {
       bucket: "response"
       value: String(root.countFor("response"))
     }
@@ -289,6 +306,14 @@ Panel {
     CompactCount {
       bucket: "idle"
       value: String(root.countFor("idle"))
+    }
+
+    Text {
+      text: ":"
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      anchors.verticalCenter: parent.verticalCenter
     }
 
     CompactArrow { }

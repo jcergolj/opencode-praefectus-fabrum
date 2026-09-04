@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "OpenCode",
-    "description": "Colored response, permission, and idle counts with direct OpenCode session focus.",
+    "description": "Total, response, permission, and idle counts with direct OpenCode session focus.",
     "category": "AI",
     "aliases": ["opencode", "praefectus", "fabrum"],
     "allowMultiple": false,
