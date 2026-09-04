@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "opencode.praefectus-fabrum",
+  "name": "OpenCode Praefectus Fabrum",
+  "version": "0.1.0",
+  "author": "jcergolj",
+  "license": "MIT",
+  "description": "OpenCode agent attention counts and session switching in the Omarchy bar.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "OpenCode",
+    "description": "Colored attention counts with direct OpenCode session focus.",
+    "category": "AI",
+    "aliases": ["opencode", "praefectus", "fabrum"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "coloredCounts": true
+    },
+    "schema": [
+      {
+        "key": "coloredCounts",
+        "type": "boolean",
+        "label": "Color attention counts",
+        "defaultValue": true,
+        "description": "Use status colors for response, permission, and failure counts."
+      }
+    ]
+  }
+}
