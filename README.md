@@ -5,7 +5,7 @@ An Omarchy bar widget for OpenCode sessions managed by
 compact attention counts in the right side of the bar:
 
 ```text
-response | permission | failed  >
+response|permission|idle↓
 ```
 
 Install the daemon first, then install the widget:
@@ -18,7 +18,7 @@ omarchy plugin add git@github.com:jcergolj/opencode-praefectus-fabrum.git --enab
 ```
 
 Click a count to focus its only matching session. When several sessions share
-the status, the count opens a filtered list. The arrow opens the complete
+the status, the count opens a filtered list. The down arrow opens the complete
 session panel, where each row focuses the selected terminal or tmux pane.
 
 The name comes from the Roman *praefectus fabrum*, an officer responsible for

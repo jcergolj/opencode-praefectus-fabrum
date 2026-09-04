@@ -17,11 +17,12 @@ Panel {
   readonly property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.45)
   readonly property color responseColor: "#d6a84f"
   readonly property color permissionColor: "#e07b39"
+  readonly property color idleColor: Color.accent
   readonly property color failedColor: Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string watcher: Qt.resolvedUrl("bin/opencode-watch").toString().replace(/^file:\/\//, "")
   readonly property var emptyState: ({
-    counts: { sessions: 0, attention: 0, response: 0, permission: 0, failed: 0, working: 0 },
+    counts: { sessions: 0, attention: 0, response: 0, permission: 0, idle: 0, working: 0 },
     sessions: []
   })
 
@@ -50,6 +51,7 @@ Panel {
     if (count <= 0) return dim
     if (bucket === "response") return responseColor
     if (bucket === "permission") return permissionColor
+    if (bucket === "idle") return idleColor
     return failedColor
   }
 
@@ -57,7 +59,7 @@ Panel {
     return {
       response: "waiting for response",
       permission: "waiting for permission",
-      failed: "failed"
+      idle: "idle"
     }[bucket] || bucket
   }
 
@@ -75,6 +77,7 @@ Panel {
   function statusColor(status) {
     if (status === "WAITING") return responseColor
     if (status === "NEEDS_APPROVAL") return permissionColor
+    if (status === "IDLE") return idleColor
     if (status === "FAILED") return failedColor
     if (status === "WORKING") return Color.accent
     return dim
@@ -84,7 +87,7 @@ Panel {
     if (!session || !session.attention) return ""
     if (session.state === "WAITING") return "response"
     if (session.state === "NEEDS_APPROVAL") return "permission"
-    if (session.state === "FAILED") return "failed"
+    if (session.state === "IDLE") return "idle"
     return ""
   }
 
@@ -199,27 +202,67 @@ Panel {
   implicitWidth: barRow.implicitWidth
   implicitHeight: bar ? bar.barSize : Style.bar.sizeHorizontal
 
+  component CompactCount: WidgetButton {
+    property string bucket: ""
+    property string value: "0"
+
+    bar: root.bar
+    text: ""
+    labelVisible: false
+    hasVisualContent: true
+    horizontalMargin: 0
+    verticalPadding: 0
+    implicitWidth: valueLabel.implicitWidth
+    implicitHeight: root.bar ? root.bar.barSize : Style.bar.sizeHorizontal
+    tooltipText: root.bucketLabel(bucket)
+
+    onPressed: function(button) {
+      if (button === Qt.LeftButton) root.openBucket(bucket)
+    }
+
+    Text {
+      id: valueLabel
+      anchors.centerIn: parent
+      text: value
+      color: root.countColor(bucket, Number(value))
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+  }
+
+  component CompactArrow: WidgetButton {
+    bar: root.bar
+    text: ""
+    labelVisible: false
+    hasVisualContent: true
+    horizontalMargin: 0
+    verticalPadding: 0
+    implicitWidth: arrowLabel.implicitWidth
+    implicitHeight: root.bar ? root.bar.barSize : Style.bar.sizeHorizontal
+    tooltipText: root.opened ? "Close OpenCode sessions" : "Expand OpenCode sessions"
+
+    onPressed: function(button) {
+      if (button === Qt.LeftButton) root.toggle()
+    }
+
+    Text {
+      id: arrowLabel
+      anchors.centerIn: parent
+      text: root.opened ? "↑" : "↓"
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+  }
+
   Row {
     id: barRow
     anchors.centerIn: parent
-    spacing: Style.space(1)
+    spacing: 0
 
-    BarIconButton {
-      bar: root.bar
-      text: "O"
-      tooltipText: "OpenCode sessions"
-      foreground: root.counts.attention > 0 ? root.failedColor : root.foreground
-      onPressed: function(button) { if (button === Qt.LeftButton) root.open() }
-    }
-
-    BarIconButton {
-      bar: root.bar
-      text: String(root.countFor("response"))
-      tooltipText: root.bucketLabel("response")
-      fontSize: Style.font.bodySmall
-      horizontalMargin: 2
-      foreground: root.countColor("response", root.countFor("response"))
-      onPressed: function(button) { if (button === Qt.LeftButton) root.openBucket("response") }
+    CompactCount {
+      bucket: "response"
+      value: String(root.countFor("response"))
     }
 
     Text {
@@ -230,14 +273,9 @@ Panel {
       anchors.verticalCenter: parent.verticalCenter
     }
 
-    BarIconButton {
-      bar: root.bar
-      text: String(root.countFor("permission"))
-      tooltipText: root.bucketLabel("permission")
-      fontSize: Style.font.bodySmall
-      horizontalMargin: 2
-      foreground: root.countColor("permission", root.countFor("permission"))
-      onPressed: function(button) { if (button === Qt.LeftButton) root.openBucket("permission") }
+    CompactCount {
+      bucket: "permission"
+      value: String(root.countFor("permission"))
     }
 
     Text {
@@ -248,23 +286,12 @@ Panel {
       anchors.verticalCenter: parent.verticalCenter
     }
 
-    BarIconButton {
-      bar: root.bar
-      text: String(root.countFor("failed"))
-      tooltipText: root.bucketLabel("failed")
-      fontSize: Style.font.bodySmall
-      horizontalMargin: 2
-      foreground: root.countColor("failed", root.countFor("failed"))
-      onPressed: function(button) { if (button === Qt.LeftButton) root.openBucket("failed") }
+    CompactCount {
+      bucket: "idle"
+      value: String(root.countFor("idle"))
     }
 
-    BarIconButton {
-      bar: root.bar
-      text: root.opened ? "<" : ">"
-      tooltipText: root.opened ? "Close OpenCode sessions" : "Expand OpenCode sessions"
-      horizontalMargin: 4
-      onPressed: function(button) { if (button === Qt.LeftButton) root.toggle() }
-    }
+    CompactArrow { }
   }
 
   IpcHandler {
