@@ -1,75 +1,12 @@
 #!/usr/bin/env python3
-"""Stream the agent-tesserarius state file for the Omarchy bar widget."""
+"""Executable entry point for the OpenCode watcher."""
 
-import argparse
-import json
-import os
-import time
-
-
-RUNTIME_DIR = os.environ.get("XDG_RUNTIME_DIR", os.path.expanduser("~/.cache"))
-STATE_FILE = os.path.join(RUNTIME_DIR, "agent-tesserarius-state.json")
-EMPTY_STATE = {
-    "generated_ts": 0,
-    "counts": {
-        "sessions": 0,
-        "attention": 0,
-        "response": 0,
-        "permission": 0,
-        "idle": 0,
-        "working": 0,
-    },
-    "sessions": [],
-}
-
-
-def read_state():
-    try:
-        with open(STATE_FILE) as fh:
-            state = json.load(fh)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(state, dict):
-        return None
-    if not isinstance(state.get("counts"), dict):
-        state["counts"] = dict(EMPTY_STATE["counts"])
-    if not isinstance(state.get("sessions"), list):
-        state["sessions"] = []
-    return state
-
-
-def signature():
-    try:
-        stat = os.stat(STATE_FILE)
-    except OSError:
-        return None
-    return stat.st_mtime_ns, stat.st_size
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--interval", type=float, default=1.0)
-    args = parser.parse_args()
-    interval = max(0.2, args.interval)
-
-    state = read_state() or EMPTY_STATE
-    print(json.dumps(state, separators=(",", ":")), flush=True)
-    last_signature = signature()
-
-    while True:
-        current_signature = signature()
-        if current_signature != last_signature:
-            updated = read_state()
-            if updated is not None:
-                state = updated
-                print(json.dumps(state, separators=(",", ":")), flush=True)
-                last_signature = current_signature
-        time.sleep(interval)
+from opencode_watch import main
 
 
 if __name__ == "__main__":
     try:
-        main()
+        raise SystemExit(main())
     except BrokenPipeError:
         pass
     except KeyboardInterrupt:

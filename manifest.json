@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "jcergolj",
   "license": "MIT",
-  "description": "OpenCode agent attention counts and session switching in the Omarchy bar.",
+  "description": "Live OpenCode agent counts and session switching in the Omarchy bar.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
   "entryPoints": {
@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "OpenCode",
-    "description": "Total, response, permission, and idle counts with direct OpenCode session focus.",
+    "description": "Live total, working, response, permission, and idle counts.",
     "category": "AI",
     "aliases": ["opencode", "praefectus", "fabrum"],
     "allowMultiple": false,
@@ -25,9 +25,9 @@
       {
         "key": "coloredCounts",
         "type": "boolean",
-        "label": "Color attention counts",
+        "label": "Color status counts",
         "defaultValue": true,
-        "description": "Use status colors for response, permission, and idle counts."
+        "description": "Use status colors for working and attention counts."
       }
     ]
   }

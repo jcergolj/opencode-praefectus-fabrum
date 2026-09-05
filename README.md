@@ -1,30 +1,108 @@
 # OpenCode Praefectus Fabrum
 
-An Omarchy bar widget for OpenCode sessions managed by
-[agent-tesserarius](https://github.com/jcergolj/agent-tesserarius). It shows
-compact attention counts in the right side of the bar:
+## What This Package Does
+
+OpenCode Praefectus Fabrum is an Omarchy bar widget for monitoring and
+switching between running OpenCode sessions.
+
+The widget shows compact live counts in the bar:
 
 ```text
-total:response|permission|idle:↓
+total:working|response|permission|idle
 ```
 
-Install the daemon first, then install the widget:
+- `total`: all top-level OpenCode processes currently running.
+- `working`: sessions currently working.
+- `response`: sessions waiting for a response.
+- `permission`: sessions waiting for permission.
+- `idle`: sessions currently idle.
+
+The counts are clickable. Click the total to open the complete session list.
+Click a status count to open its filtered list. Click a session row to focus its
+terminal or tmux pane.
+
+The widget watches live top-level `opencode` processes. Nested OpenCode
+processes created by subagents are ignored. A new process starts as idle until
+its status is reported.
+
+## Why This Name
+
+*Praefectus fabrum* was a Roman title for an officer responsible for skilled
+craftsmen, engineers, and technical workers. OpenCode agents are modern
+technical workers, and this widget organizes their work and directs you to the
+session that needs attention.
+
+## Keyboard Shortcuts
+
+The watcher provides a focus command for each session state. Add these
+keybindings to your Hyprland bindings file, for example
+`~/.config/hypr/bindings.conf`:
+
+```ini
+bind = SUPER ALT, W, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-state working
+bind = SUPER ALT, R, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-state response
+bind = SUPER ALT, P, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-state permission
+bind = SUPER ALT, I, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-state idle
+```
+
+The shortcuts are:
+
+```text
+SUPER + ALT + W  focus a working session
+SUPER + ALT + R  focus a session waiting for a response
+SUPER + ALT + P  focus a session waiting for permission
+SUPER + ALT + I  focus an idle session
+```
+
+The first press focuses the first matching session. Press the same shortcut
+again to cycle to the next matching session. Reload Hyprland after adding the
+bindings:
 
 ```bash
-git clone git@github.com:jcergolj/agent-tesserarius.git
-cd agent-tesserarius
-./install.sh
-omarchy plugin add git@github.com:jcergolj/opencode-praefectus-fabrum.git --enable
+hyprctl reload
 ```
 
-Click a count to focus its only matching session. When several sessions share
-the status, the count opens a filtered list. The down arrow opens the complete
-session panel, where each row focuses the selected terminal or tmux pane.
+If the plugin was installed somewhere else, replace the plugin path in each
+binding with the actual path to `bin/opencode-watch`.
 
-The name comes from the Roman *praefectus fabrum*, an officer responsible for
-the *fabri*: skilled craftsmen, engineers, and technical workers. OpenCode
-agents are the modern *fabri*, while this widget organizes their work and
-directs the user to the agent that needs attention.
+## Prerequisites
 
-The widget reads the local daemon state file. It does not scrape terminal
+- Omarchy with its bar and plugin support.
+- The `omarchy` command for installing the bar plugin.
+- OpenCode, if you want OpenCode sessions to be tracked.
+- Python 3. The watcher uses only the Python standard library.
+- Hyprland, for focusing OpenCode windows.
+- `tmux` is optional. It is used when an OpenCode session runs in a tmux pane.
+- No npm packages are required.
+
+## Installation
+
+Install the Omarchy bar plugin:
+
+```bash
+omarchy plugin add https://github.com/jcergolj/opencode-praefectus-fabrum.git --enable
+```
+
+The total and process-based idle counts work without the OpenCode status
+bridge. To receive live working, response, and permission states, link the
+bundled OpenCode plugin and restart OpenCode:
+
+```bash
+mkdir -p ~/.config/opencode/plugins
+ln -sfn \
+  ~/.config/omarchy/plugins/opencode.praefectus-fabrum/opencode-plugin/index.js \
+  ~/.config/opencode/plugins/opencode-praefectus-fabrum.js
+```
+
+The bridge writes per-process status records under `$XDG_RUNTIME_DIR`, or
+`~/.cache` when that variable is not set. The widget does not scrape terminal
 output or access OpenCode's private storage.
+
+## Tests
+
+Run the watcher and bridge tests from the repository root:
+
+```bash
+python3 -m unittest discover -s tests -v
+node --test tests/test_opencode_plugin.mjs
+```

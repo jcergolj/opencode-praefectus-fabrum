@@ -5,8 +5,8 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
-// OpenCode Praefectus Fabrum: compact attention counts for the Omarchy bar.
-// Counts are clickable; the arrow opens the full session list.
+// OpenCode Praefectus Fabrum: compact live agent counts for the Omarchy bar.
+// Counts are clickable; the total count toggles the full session list.
 Panel {
   id: root
   moduleName: "opencode.praefectus-fabrum"
@@ -16,9 +16,8 @@ Panel {
   readonly property color foreground: bar ? bar.barForeground : Color.foreground
   readonly property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.45)
   readonly property color responseColor: "#d6a84f"
-  readonly property color permissionColor: "#e07b39"
+  readonly property color permissionColor: Color.urgent
   readonly property color idleColor: Color.accent
-  readonly property color failedColor: Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string watcher: Qt.resolvedUrl("bin/opencode-watch").toString().replace(/^file:\/\//, "")
   readonly property var emptyState: ({
@@ -50,15 +49,17 @@ Panel {
     if (!coloredCounts) return count > 0 ? foreground : dim
     if (count <= 0) return dim
     if (bucket === "all") return foreground
+    if (bucket === "working") return Color.accent
     if (bucket === "response") return responseColor
     if (bucket === "permission") return permissionColor
     if (bucket === "idle") return idleColor
-    return failedColor
+    return foreground
   }
 
   function bucketLabel(bucket) {
     return {
       all: "all OpenCode sessions",
+      working: "working OpenCode agents",
       response: "waiting for response",
       permission: "waiting for permission",
       idle: "idle"
@@ -70,8 +71,6 @@ Panel {
       WORKING: "working",
       WAITING: "waiting for response",
       NEEDS_APPROVAL: "waiting for permission",
-      FAILED: "failed",
-      COMPLETED: "completed",
       IDLE: "idle"
     }[status] || String(status || "unknown").toLowerCase()
   }
@@ -80,13 +79,13 @@ Panel {
     if (status === "WAITING") return responseColor
     if (status === "NEEDS_APPROVAL") return permissionColor
     if (status === "IDLE") return idleColor
-    if (status === "FAILED") return failedColor
     if (status === "WORKING") return Color.accent
     return dim
   }
 
   function bucketFor(session) {
-    if (!session || !session.attention) return ""
+    if (!session) return ""
+    if (session.state === "WORKING") return "working"
     if (session.state === "WAITING") return "response"
     if (session.state === "NEEDS_APPROVAL") return "permission"
     if (session.state === "IDLE") return "idle"
@@ -129,6 +128,11 @@ Panel {
     root.open()
   }
 
+  function openAll() {
+    clearFilter()
+    root.toggle()
+  }
+
   function clearFilter() {
     filter = ""
     cursor = 0
@@ -136,7 +140,9 @@ Panel {
 
   function focusSession(sessionId) {
     if (!sessionId) return
-    Quickshell.execDetached(["agent-tesserarius", "focus", String(sessionId)])
+    var session = sessions.find(function(item) { return item.session_id === sessionId })
+    var target = session ? session.source_pid : sessionId
+    Quickshell.execDetached([root.watcher, "--focus", String(target)])
     root.close()
   }
 
@@ -209,54 +215,22 @@ Panel {
     property string value: "0"
 
     bar: root.bar
-    text: ""
-    labelVisible: false
-    hasVisualContent: true
+    text: value
+    fontSize: Style.font.bodySmall
+    foreground: root.countColor(bucket, Number(value))
     horizontalMargin: 0
     verticalPadding: 0
-    implicitWidth: valueLabel.implicitWidth
     implicitHeight: root.bar ? root.bar.barSize : Style.bar.sizeHorizontal
     tooltipText: root.bucketLabel(bucket)
 
     onPressed: function(button) {
       if (button !== Qt.LeftButton) return
-      if (bucket === "all") root.open()
+      if (bucket === "all") {
+        root.openAll()
+      }
       else root.openBucket(bucket)
     }
 
-    Text {
-      id: valueLabel
-      anchors.centerIn: parent
-      text: value
-      color: root.countColor(bucket, Number(value))
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-    }
-  }
-
-  component CompactArrow: WidgetButton {
-    bar: root.bar
-    text: ""
-    labelVisible: false
-    hasVisualContent: true
-    horizontalMargin: 0
-    verticalPadding: 0
-    implicitWidth: arrowLabel.implicitWidth
-    implicitHeight: root.bar ? root.bar.barSize : Style.bar.sizeHorizontal
-    tooltipText: root.opened ? "Close OpenCode sessions" : "Expand OpenCode sessions"
-
-    onPressed: function(button) {
-      if (button === Qt.LeftButton) root.toggle()
-    }
-
-    Text {
-      id: arrowLabel
-      anchors.centerIn: parent
-      text: root.opened ? "↑" : "↓"
-      color: root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.bodySmall
-    }
   }
 
   Row {
@@ -271,6 +245,19 @@ Panel {
 
     Text {
       text: ":"
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      anchors.verticalCenter: parent.verticalCenter
+    }
+
+    CompactCount {
+      bucket: "working"
+      value: String(root.countFor("working"))
+    }
+
+    Text {
+      text: "|"
       color: root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
@@ -308,15 +295,6 @@ Panel {
       value: String(root.countFor("idle"))
     }
 
-    Text {
-      text: ":"
-      color: root.dim
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.caption
-      anchors.verticalCenter: parent.verticalCenter
-    }
-
-    CompactArrow { }
   }
 
   IpcHandler {
@@ -413,7 +391,7 @@ Panel {
                   width: Style.space(12)
                   anchors.top: parent.top
                   anchors.topMargin: Style.space(12)
-                  text: modelData.state === "FAILED" ? "!" : (modelData.attention ? "*" : ".")
+                  text: modelData.attention ? "*" : "."
                   color: root.statusColor(modelData.state)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -512,7 +490,7 @@ Panel {
 
           Text {
             width: parent.width
-            text: "click row to focus · click arrow to preview · r clears filter"
+            text: "click row to focus · click row arrow to preview · r clears filter"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
