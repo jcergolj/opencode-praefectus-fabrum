@@ -18,69 +18,69 @@ SPEC.loader.exec_module(watch)
 
 
 class FakeProcessSource:
-    def __init__(self, processes, process_ancestors):
-        self.processes = processes
+    def __init__(self, process_info_by_pid, process_ancestors):
+        self.process_info_by_pid = process_info_by_pid
         self.process_ancestors = process_ancestors
 
     def opencode_pids(self):
-        return set(self.processes)
+        return set(self.process_info_by_pid)
 
     def inspect(self, pid):
-        return self.processes.get(pid)
+        return self.process_info_by_pid.get(pid)
 
     def ancestors(self, pid):
         return self.process_ancestors.get(pid, [pid])
 
 
 class FakeAttentionSource:
-    def __init__(self, sessions):
-        self.sessions = sessions
+    def __init__(self, status_records):
+        self.status_records = status_records
 
     def read(self):
-        return self.sessions
+        return self.status_records
 
 
 class FakeTerminal:
     def __init__(self, pane=None):
         self.pane = pane
-        self.panes_calls = 0
+        self.pane_call_count = 0
 
     def panes(self):
-        self.panes_calls += 1
+        self.pane_call_count += 1
         return [self.pane] if self.pane else []
 
 
 class FakeSnapshotSource:
-    def __init__(self, states):
-        self.states = iter(states)
-        self.last_state = None
+    def __init__(self, snapshots):
+        self.snapshots = iter(snapshots)
+        self.last_snapshot = None
 
     def snapshot(self):
         try:
-            self.last_state = next(self.states)
+            self.last_snapshot = next(self.snapshots)
         except StopIteration:
             pass
-        return self.last_state
+        return self.last_snapshot
 
 
 class FakeFocusTarget:
-    def __init__(self, result):
-        self.result = result
-        self.calls = []
+    def __init__(self, focus_succeeded):
+        self.focus_succeeded = focus_succeeded
+        self.focus_calls = []
 
     def focus(self, ancestors):
-        self.calls.append(ancestors)
-        return self.result
+        self.focus_calls.append(ancestors)
+        return self.focus_succeeded
 
 
 class FakeFocusService:
-    def __init__(self, result):
-        self.result = result
-        self.calls = []
+    def __init__(self, focus_succeeded):
+        self.focus_succeeded = focus_succeeded
+        self.focus_calls = []
 
     def focus(self, target):
-        self.calls.append(target)
-        return self.result
+        self.focus_calls.append(target)
+        return self.focus_succeeded
 
 
 class SessionStateMachineTests(unittest.TestCase):
@@ -150,9 +150,11 @@ class AttentionStateReaderTests(unittest.TestCase):
                 )
             )
 
-            sessions = watch.AttentionStateReader(state_file).read()
+            records_by_pid = watch.AttentionStateReader(state_file).read()
 
-        self.assertEqual(sessions, {41: {"source_pid": 41, "session_id": "root"}})
+        self.assertEqual(
+            records_by_pid, {41: {"source_pid": 41, "session_id": "root"}}
+        )
 
     def test_read_returns_empty_mapping_for_invalid_json(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -236,10 +238,10 @@ class SnapshotServiceTests(unittest.TestCase):
 
         self.assertEqual(collector.collect()[0].state, "NEEDS_APPROVAL")
 
-        attention_source.sessions[101]["state"] = "WORKING"
+        attention_source.status_records[101]["state"] = "WORKING"
         self.assertEqual(collector.collect()[0].state, "WORKING")
 
-        attention_source.sessions[101]["state"] = "NEEDS_APPROVAL"
+        attention_source.status_records[101]["state"] = "NEEDS_APPROVAL"
         self.assertEqual(collector.collect()[0].state, "NEEDS_APPROVAL")
 
     def test_status_record_allows_plugin_startup_clock_skew(self):
@@ -276,11 +278,13 @@ class SnapshotServiceTests(unittest.TestCase):
 
         self.assertEqual(collector.collect()[0].state, "WORKING")
 
-        process_source.processes.clear()
+        process_source.process_info_by_pid.clear()
         self.assertEqual(collector.collect(), [])
 
-        process_source.processes[101] = watch.ProcessInfo(101, "/work/alpha", 200)
-        attention_source.sessions[101]["state"] = "WAITING"
+        process_source.process_info_by_pid[101] = watch.ProcessInfo(
+            101, "/work/alpha", 200
+        )
+        attention_source.status_records[101]["state"] = "WAITING"
         self.assertEqual(collector.collect()[0].state, "WAITING")
 
     def test_snapshot_ignores_nested_processes_and_aggregates_states(self):
@@ -314,7 +318,7 @@ class SnapshotServiceTests(unittest.TestCase):
         snapshots = watch.SnapshotService(collector, clock=lambda: 1234)
 
         collector.collect()
-        attention_source.sessions[101]["state"] = "WAITING"
+        attention_source.status_records[101]["state"] = "WAITING"
         state = snapshots.snapshot()
 
         self.assertEqual(state["generated_ts"], 1234)
@@ -332,7 +336,7 @@ class SnapshotServiceTests(unittest.TestCase):
         )
         self.assertEqual(state["sessions"][0]["tmux_pane"], "%1")
         self.assertEqual(state["sessions"][1]["state"], "IDLE")
-        self.assertEqual(terminal.panes_calls, 2)
+        self.assertEqual(terminal.pane_call_count, 2)
 
     def test_untracked_process_defaults_to_idle(self):
         process_source = FakeProcessSource(
@@ -366,7 +370,7 @@ class SnapshotServiceTests(unittest.TestCase):
         collector = watch.SessionCollector(process_source, attention_source, FakeTerminal())
 
         collector.collect()
-        attention_source.sessions[101]["state"] = "NEEDS_APPROVAL"
+        attention_source.status_records[101]["state"] = "NEEDS_APPROVAL"
 
         counts = watch.SnapshotService(collector).snapshot()["counts"]
 
@@ -401,11 +405,11 @@ class FocusServiceTests(unittest.TestCase):
         hyprland = FakeFocusTarget(True)
         focus = watch.FocusService(process_source, [tmux, hyprland])
 
-        result = focus.focus("pid:55")
+        focus_succeeded = focus.focus("pid:55")
 
-        self.assertTrue(result)
-        self.assertEqual(tmux.calls, [[55, 12]])
-        self.assertEqual(hyprland.calls, [[55, 12]])
+        self.assertTrue(focus_succeeded)
+        self.assertEqual(tmux.focus_calls, [[55, 12]])
+        self.assertEqual(hyprland.focus_calls, [[55, 12]])
 
     def test_focus_rejects_non_numeric_targets(self):
         process_source = FakeProcessSource({}, {})
@@ -414,12 +418,12 @@ class FocusServiceTests(unittest.TestCase):
         self.assertFalse(
             watch.FocusService(process_source, [target]).focus("not-a-pid")
         )
-        self.assertEqual(target.calls, [])
+        self.assertEqual(target.focus_calls, [])
 
 
 class FocusCycleStoreTests(unittest.TestCase):
     def test_working_sessions_are_candidates_without_attention(self):
-        state = {
+        snapshot = {
             "sessions": [
                 {"source_pid": 101, "state": "WORKING", "attention": False},
                 {"source_pid": 202, "state": "WAITING", "attention": True},
@@ -427,12 +431,12 @@ class FocusCycleStoreTests(unittest.TestCase):
         }
 
         self.assertEqual(
-            watch.focus_target_for_state(state, "working"),
+            watch.focus_target_for_state(snapshot, "working"),
             101,
         )
 
     def test_repeated_focus_cycles_per_status(self):
-        state = {
+        snapshot = {
             "sessions": [
                 {
                     "session_id": "first",
@@ -448,17 +452,19 @@ class FocusCycleStoreTests(unittest.TestCase):
                 },
             ]
         }
-        focused = []
+        focused_targets = []
 
         with tempfile.TemporaryDirectory() as directory:
             store = watch.FocusCycleStore(Path(directory) / "focus.json")
-            focus = lambda target: focused.append(target) or True
+            focus_session = (
+                lambda session_target: focused_targets.append(session_target) or True
+            )
 
-            self.assertTrue(store.focus(state, "working", focus))
-            self.assertTrue(store.focus(state, "working", focus))
-            self.assertTrue(store.focus(state, "working", focus))
+            self.assertTrue(store.focus(snapshot, "working", focus_session))
+            self.assertTrue(store.focus(snapshot, "working", focus_session))
+            self.assertTrue(store.focus(snapshot, "working", focus_session))
 
-        self.assertEqual(focused, [101, 202, 101])
+        self.assertEqual(focused_targets, [101, 202, 101])
 
 
 class TmuxClientTests(unittest.TestCase):
@@ -486,7 +492,7 @@ class TmuxClientTests(unittest.TestCase):
             calls[-1][0],
             ["tmux", "switch-client", "-c", "client-1", "-t", "%7"],
         )
-        self.assertEqual(window_focus.calls, [[99, 88]])
+        self.assertEqual(window_focus.focus_calls, [[99, 88]])
 
     def test_focus_reports_failure_when_pane_command_fails(self):
         def runner(command, **kwargs):
@@ -551,46 +557,48 @@ class SnapshotStreamerTests(unittest.TestCase):
             "state": "WORKING",
             "preview": "first",
         }
-        first = {"counts": {"sessions": 1}, "sessions": [session]}
-        changed = {
+        initial_snapshot = {"counts": {"sessions": 1}, "sessions": [session]}
+        changed_snapshot = {
             "counts": {"sessions": 1},
             "sessions": [{**session, "preview": "second"}],
         }
-        source = FakeSnapshotSource([first, changed])
-        output = []
-        sleeps = []
+        snapshot_source = FakeSnapshotSource([initial_snapshot, changed_snapshot])
+        emitted_payloads = []
+        sleep_intervals = []
 
         def stop_after_two_snapshots(interval):
-            sleeps.append(interval)
-            if len(sleeps) == 2:
+            sleep_intervals.append(interval)
+            if len(sleep_intervals) == 2:
                 raise StopIteration
 
         streamer = watch.SnapshotStreamer(
-            source,
+            snapshot_source,
             interval=1,
             sleep=stop_after_two_snapshots,
-            emit=output.append,
+            emit=emitted_payloads.append,
         )
 
         with self.assertRaises(StopIteration):
             streamer.run()
 
-        self.assertEqual(len(output), 2)
-        self.assertEqual(json.loads(output[1])["sessions"][0]["preview"], "second")
+        self.assertEqual(len(emitted_payloads), 2)
+        self.assertEqual(
+            json.loads(emitted_payloads[1])["sessions"][0]["preview"], "second"
+        )
 
 
 class CommandLineTests(unittest.TestCase):
     def test_focus_option_is_handled_even_for_an_empty_argument(self):
         focus = FakeFocusService(True)
 
-        result = watch.main(
+        focus_succeeded = watch.main(
             ["--focus", ""],
             snapshot_source=SimpleNamespace(snapshot=lambda: {}),
             focus_service=focus,
         )
 
-        self.assertEqual(result, 0)
-        self.assertEqual(focus.calls, [""])
+        self.assertEqual(focus_succeeded, 0)
+        self.assertEqual(focus.focus_calls, [""])
 
     def test_focus_state_selects_oldest_attention_session(self):
         focus = FakeFocusService(True)
@@ -623,14 +631,14 @@ class CommandLineTests(unittest.TestCase):
                 "FOCUS_CYCLE_STATE_FILE",
                 str(Path(directory) / "focus.json"),
             ):
-                result = watch.main(
+                focus_succeeded = watch.main(
                     ["--focus-state", "permission"],
                     snapshot_source=SimpleNamespace(snapshot=lambda: snapshot),
                     focus_service=focus,
                 )
 
-        self.assertEqual(result, 0)
-        self.assertEqual(focus.calls, [101])
+        self.assertEqual(focus_succeeded, 0)
+        self.assertEqual(focus.focus_calls, [101])
 
     def test_focus_state_returns_failure_when_no_session_matches(self):
         focus = FakeFocusService(True)
@@ -641,14 +649,14 @@ class CommandLineTests(unittest.TestCase):
                 "FOCUS_CYCLE_STATE_FILE",
                 str(Path(directory) / "focus.json"),
             ):
-                result = watch.main(
+                focus_succeeded = watch.main(
                     ["--focus-state", "response"],
                     snapshot_source=SimpleNamespace(snapshot=lambda: {"sessions": []}),
                     focus_service=focus,
                 )
 
-        self.assertEqual(result, 1)
-        self.assertEqual(focus.calls, [])
+        self.assertEqual(focus_succeeded, 1)
+        self.assertEqual(focus.focus_calls, [])
 
     def test_focus_state_selects_idle_session_without_attention(self):
         focus = FakeFocusService(True)
@@ -670,14 +678,14 @@ class CommandLineTests(unittest.TestCase):
                 "FOCUS_CYCLE_STATE_FILE",
                 str(Path(directory) / "focus.json"),
             ):
-                result = watch.main(
+                focus_succeeded = watch.main(
                     ["--focus-state", "idle"],
                     snapshot_source=SimpleNamespace(snapshot=lambda: snapshot),
                     focus_service=focus,
                 )
 
-        self.assertEqual(result, 0)
-        self.assertEqual(focus.calls, [101])
+        self.assertEqual(focus_succeeded, 0)
+        self.assertEqual(focus.focus_calls, [101])
 
     def test_focus_state_cycles_across_repeated_commands(self):
         focus = FakeFocusService(True)
@@ -723,7 +731,7 @@ class CommandLineTests(unittest.TestCase):
                     0,
                 )
 
-        self.assertEqual(focus.calls, [101, 202])
+        self.assertEqual(focus.focus_calls, [101, 202])
 
 
 if __name__ == "__main__":

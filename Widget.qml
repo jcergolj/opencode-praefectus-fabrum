@@ -20,58 +20,58 @@ Panel {
   readonly property color permissionColor: "#ef4444"
   readonly property color idleColor: "#22c55e"
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property string watcher: Qt.resolvedUrl("bin/opencode-watch").toString().replace(/^file:\/\//, "")
-  readonly property var emptyState: ({
+  readonly property string watcherPath: Qt.resolvedUrl("bin/opencode-watch").toString().replace(/^file:\/\//, "")
+  readonly property var emptySnapshot: ({
     counts: { sessions: 0, attention: 0, response: 0, permission: 0, idle: 0, working: 0 },
     sessions: []
   })
 
-  property var liveState: null
-  property string filter: ""
+  property var liveSnapshot: null
+  property string activeFilter: ""
   property string expandedSessionId: ""
   property bool settingsOpen: false
-  property int cursor: 0
-  property double nowMs: Date.now()
+  property int selectedSessionIndex: 0
+  property double currentTimeMs: Date.now()
 
-  function setting(name, fallback) {
-    var value = root.settings ? root.settings[name] : undefined
-    return value === undefined || value === null ? fallback : value
+  function setting(settingName, defaultValue) {
+    var settingValue = root.settings ? root.settings[settingName] : undefined
+    return settingValue === undefined || settingValue === null ? defaultValue : settingValue
   }
 
   readonly property bool coloredCounts: String(setting("coloredCounts", true)) !== "false"
-  readonly property var state: liveState || emptyState
-  readonly property var counts: state.counts || emptyState.counts
-  readonly property var sessions: state.sessions || []
+  readonly property var snapshot: liveSnapshot || emptySnapshot
+  readonly property var counts: snapshot.counts || emptySnapshot.counts
+  readonly property var sessions: snapshot.sessions || []
 
-  function setColoredCounts(value) {
-    var next = Object.assign({}, root.settings, { coloredCounts: value })
-    root.settings = next
+  function setColoredCounts(enabled) {
+    var updatedSettings = Object.assign({}, root.settings, { coloredCounts: enabled })
+    root.settings = updatedSettings
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
-      root.bar.shell.updateEntryInline(root.moduleName, next)
+      root.bar.shell.updateEntryInline(root.moduleName, updatedSettings)
   }
 
-  function countFor(bucket) {
-    return Number(counts[bucket] || 0)
+  function countFor(statusBucket) {
+    return Number(counts[statusBucket] || 0)
   }
 
-  function countColor(bucket) {
+  function countColor(statusBucket) {
     if (!coloredCounts) return foreground
-    if (bucket === "all") return foreground
-    if (bucket === "working") return workingColor
-    if (bucket === "response") return responseColor
-    if (bucket === "permission") return permissionColor
-    if (bucket === "idle") return idleColor
+    if (statusBucket === "all") return foreground
+    if (statusBucket === "working") return workingColor
+    if (statusBucket === "response") return responseColor
+    if (statusBucket === "permission") return permissionColor
+    if (statusBucket === "idle") return idleColor
     return foreground
   }
 
-  function bucketLabel(bucket) {
+  function bucketLabel(statusBucket) {
     return {
       all: "all OpenCode sessions",
       working: "working OpenCode agents",
       response: "waiting for response",
       permission: "waiting for permission",
       idle: "idle"
-    }[bucket] || bucket
+    }[statusBucket] || statusBucket
   }
 
   function statusLabel(status) {
@@ -93,38 +93,40 @@ Panel {
 
   function bucketFor(session) {
     if (!session) return ""
-    var state = String(session.state || "").trim().toUpperCase()
-    if (state === "WORKING") return "working"
-    if (state === "WAITING") return "response"
-    if (state === "NEEDS_APPROVAL") return "permission"
-    if (state === "IDLE") return "idle"
+    var sessionStatus = String(session.state || "").trim().toUpperCase()
+    if (sessionStatus === "WORKING") return "working"
+    if (sessionStatus === "WAITING") return "response"
+    if (sessionStatus === "NEEDS_APPROVAL") return "permission"
+    if (sessionStatus === "IDLE") return "idle"
     return ""
   }
 
   function sortedSessions() {
-    var result = sessions.slice()
-    result.sort(function(a, b) {
-      var aAttention = a.attention ? 0 : 1
-      var bAttention = b.attention ? 0 : 1
-      if (aAttention !== bAttention) return aAttention - bAttention
-      var aTs = Number(a.attention_since || a.last_transition_ts || 0)
-      var bTs = Number(b.attention_since || b.last_transition_ts || 0)
-      if (a.attention && b.attention && aTs !== bTs) return aTs - bTs
-      return bTs - aTs
+    var sortedSessionList = sessions.slice()
+    sortedSessionList.sort(function(leftSession, rightSession) {
+      var leftAttentionRank = leftSession.attention ? 0 : 1
+      var rightAttentionRank = rightSession.attention ? 0 : 1
+      if (leftAttentionRank !== rightAttentionRank)
+        return leftAttentionRank - rightAttentionRank
+      var leftTimestamp = Number(leftSession.attention_since || leftSession.last_transition_ts || 0)
+      var rightTimestamp = Number(rightSession.attention_since || rightSession.last_transition_ts || 0)
+      if (leftSession.attention && rightSession.attention && leftTimestamp !== rightTimestamp)
+        return leftTimestamp - rightTimestamp
+      return rightTimestamp - leftTimestamp
     })
-    return result
+    return sortedSessionList
   }
 
   readonly property var visibleSessions: {
-    var result = sortedSessions()
-    if (filter === "") return result
-    return result.filter(function(session) { return bucketFor(session) === filter })
+    var filteredSessionList = sortedSessions()
+    if (activeFilter === "") return filteredSessionList
+    return filteredSessionList.filter(function(session) { return bucketFor(session) === activeFilter })
   }
 
-  function openBucket(bucket) {
-    filter = bucket
+  function openBucket(statusBucket) {
+    activeFilter = statusBucket
     expandedSessionId = ""
-    cursor = 0
+    selectedSessionIndex = 0
     root.open()
   }
 
@@ -135,33 +137,33 @@ Panel {
   }
 
   function clearFilter() {
-    filter = ""
-    cursor = 0
+    activeFilter = ""
+    selectedSessionIndex = 0
   }
 
   function focusSession(sessionId) {
     if (!sessionId) return
-    var session = sessions.find(function(item) { return item.session_id === sessionId })
-    var target = session ? session.source_pid : sessionId
-    Quickshell.execDetached([root.watcher, "--focus", String(target)])
+    var selectedSession = sessions.find(function(item) { return item.session_id === sessionId })
+    var focusTarget = selectedSession ? selectedSession.source_pid : sessionId
+    Quickshell.execDetached([root.watcherPath, "--focus", String(focusTarget)])
     root.close()
   }
 
-  function moveCursor(delta) {
+  function moveCursor(cursorDelta) {
     if (visibleSessions.length === 0) return
-    cursor = Math.max(0, Math.min(visibleSessions.length - 1, cursor + delta))
+    selectedSessionIndex = Math.max(0, Math.min(visibleSessions.length - 1, selectedSessionIndex + cursorDelta))
   }
 
   function activateCursor() {
-    if (visibleSessions.length > 0) focusSession(visibleSessions[cursor].session_id)
+    if (visibleSessions.length > 0) focusSession(visibleSessions[selectedSessionIndex].session_id)
   }
 
   function toggleExpanded(sessionId) {
     expandedSessionId = expandedSessionId === sessionId ? "" : sessionId
   }
 
-  function formatAge(timestamp) {
-    var seconds = Math.max(0, nowMs / 1000 - Number(timestamp || 0))
+  function formatAge(transitionTimestamp) {
+    var seconds = Math.max(0, currentTimeMs / 1000 - Number(transitionTimestamp || 0))
     if (!isFinite(seconds) || seconds < 10) return "now"
     if (seconds < 60) return Math.floor(seconds) + "s"
     var minutes = Math.floor(seconds / 60)
@@ -177,27 +179,28 @@ Panel {
     return statusLabel(session.state)
   }
 
-  function parseState(text) {
+  function parseState(inputText) {
     try {
-      var parsed = JSON.parse(String(text || ""))
-      if (parsed && typeof parsed === "object") {
-        liveState = parsed
-        nowMs = Date.now()
-        if (cursor >= visibleSessions.length) cursor = Math.max(0, visibleSessions.length - 1)
+      var parsedSnapshot = JSON.parse(String(inputText || ""))
+      if (parsedSnapshot && typeof parsedSnapshot === "object") {
+        liveSnapshot = parsedSnapshot
+        currentTimeMs = Date.now()
+        if (selectedSessionIndex >= visibleSessions.length)
+          selectedSessionIndex = Math.max(0, visibleSessions.length - 1)
       }
-    } catch (error) {
-      console.warn("praefectus-fabrum", "bad state line", error)
+    } catch (parseError) {
+      console.warn("praefectus-fabrum", "bad state line", parseError)
     }
   }
 
   Process {
     id: watcherProcess
-    command: [root.watcher, "--interval", "1"]
+    command: [root.watcherPath, "--interval", "1"]
     running: true
-    stdout: SplitParser { onRead: function(data) { root.parseState(data) } }
+    stdout: SplitParser { onRead: function(outputChunk) { root.parseState(outputChunk) } }
     stderr: SplitParser {
-      onRead: function(data) {
-        if (String(data).trim() !== "") console.warn("praefectus-fabrum", String(data).trim())
+      onRead: function(outputChunk) {
+        if (String(outputChunk).trim() !== "") console.warn("praefectus-fabrum", String(outputChunk).trim())
       }
     }
   }
@@ -206,31 +209,31 @@ Panel {
     interval: 30000
     running: true
     repeat: true
-    onTriggered: root.nowMs = Date.now()
+    onTriggered: root.currentTimeMs = Date.now()
   }
 
   implicitWidth: barRow.implicitWidth
   implicitHeight: bar ? bar.barSize : Style.bar.sizeHorizontal
 
   component CompactCount: WidgetButton {
-    property string bucket: ""
-    property string value: "0"
+    property string statusBucket: ""
+    property string displayValue: "0"
 
     bar: root.bar
-    text: value
+    text: displayValue
     fontSize: Style.font.bodySmall
-    foreground: root.countColor(bucket)
+    foreground: root.countColor(statusBucket)
     horizontalMargin: 0
     verticalPadding: 0
     implicitHeight: root.bar ? root.bar.barSize : Style.bar.sizeHorizontal
-    tooltipText: root.bucketLabel(bucket)
+    tooltipText: root.bucketLabel(statusBucket)
 
     onPressed: function(button) {
       if (button !== Qt.LeftButton) return
-      if (bucket === "all") {
+      if (statusBucket === "all") {
         root.openAll()
       }
-      else root.openBucket(bucket)
+      else root.openBucket(statusBucket)
     }
 
   }
@@ -241,8 +244,8 @@ Panel {
     spacing: 0
 
     CompactCount {
-      bucket: "all"
-      value: String(root.countFor("sessions"))
+      statusBucket: "all"
+      displayValue: String(root.countFor("sessions"))
     }
 
     Text {
@@ -254,8 +257,8 @@ Panel {
     }
 
     CompactCount {
-      bucket: "working"
-      value: String(root.countFor("working"))
+      statusBucket: "working"
+      displayValue: String(root.countFor("working"))
     }
 
     Text {
@@ -267,8 +270,8 @@ Panel {
     }
 
     CompactCount {
-      bucket: "response"
-      value: String(root.countFor("response"))
+      statusBucket: "response"
+      displayValue: String(root.countFor("response"))
     }
 
     Text {
@@ -280,8 +283,8 @@ Panel {
     }
 
     CompactCount {
-      bucket: "permission"
-      value: String(root.countFor("permission"))
+      statusBucket: "permission"
+      displayValue: String(root.countFor("permission"))
     }
 
     Text {
@@ -293,8 +296,8 @@ Panel {
     }
 
     CompactCount {
-      bucket: "idle"
-      value: String(root.countFor("idle"))
+      statusBucket: "idle"
+      displayValue: String(root.countFor("idle"))
     }
 
   }
@@ -344,9 +347,9 @@ Panel {
 
           Text {
             width: parent.width
-            text: root.filter === ""
+            text: root.activeFilter === ""
               ? "OpenCode sessions"
-              : "OpenCode · " + root.bucketLabel(root.filter)
+              : "OpenCode · " + root.bucketLabel(root.activeFilter)
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -371,7 +374,7 @@ Panel {
               required property var modelData
               required property int index
               readonly property bool expanded: root.expandedSessionId === modelData.session_id
-              readonly property bool selected: index === root.cursor
+              readonly property bool selected: index === root.selectedSessionIndex
               width: panelColumn.width
               height: expanded ? Style.space(104) : Style.space(60)
 
@@ -483,7 +486,7 @@ Panel {
           Text {
             visible: root.visibleSessions.length === 0
             width: parent.width
-            text: root.filter === "" ? "No OpenCode sessions tracked" : "No sessions in this category"
+            text: root.activeFilter === "" ? "No OpenCode sessions tracked" : "No sessions in this category"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall

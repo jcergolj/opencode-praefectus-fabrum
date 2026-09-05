@@ -32,14 +32,14 @@ from typing import (
 
 RUNTIME_DIR = os.environ.get("XDG_RUNTIME_DIR", os.path.expanduser("~/.cache"))
 # Status metadata is optional; live process counting never depends on it.
-STATUS_STATE_FILE = os.environ.get(
+STATUS_RECORD_PATH = os.environ.get(
     "OPENCODE_STATUS_FILE",
     os.path.join(RUNTIME_DIR, "opencode-praefectus-fabrum"),
 )
 FOCUS_CYCLE_STATE_FILE = os.path.join(RUNTIME_DIR, "opencode-focus-cycle.json")
 # OpenCode can initialize the plugin a few seconds after the process starts.
 PROCESS_START_TOLERANCE = 5.0
-EMPTY_COUNTS = {
+EMPTY_SESSION_COUNTS = {
     "sessions": 0,
     "attention": 0,
     "response": 0,
@@ -309,60 +309,68 @@ class SessionStateRegistry:
         return machine.status
 
     def remove_missing(self, active_pids: Iterable[int]) -> None:
-        active = set(active_pids)
-        for source_pid in set(self._machines) - active:
+        active_pid_set = set(active_pids)
+        for source_pid in set(self._machines) - active_pid_set:
             del self._machines[source_pid]
 
 
 class AttentionStateReader:
     """Read optional status records indexed by source PID."""
 
-    def __init__(self, path: Union[os.PathLike, str]):
-        self.path = os.fspath(path)
+    def __init__(self, status_path: Union[os.PathLike, str]):
+        self.status_path = os.fspath(status_path)
 
     @staticmethod
-    def _read_file(path: str) -> Dict[int, Mapping[str, Any]]:
+    def _read_file(record_path: str) -> Dict[int, Mapping[str, Any]]:
         try:
-            with open(path, encoding="utf-8") as state_file:
-                state = json.load(state_file)
+            with open(record_path, encoding="utf-8") as state_file:
+                status_document = json.load(state_file)
         except (OSError, ValueError, TypeError):
             return {}
 
-        result: Dict[int, Mapping[str, Any]] = {}
-        records = state.get("sessions") if isinstance(state, dict) else None
-        if isinstance(records, list):
-            records = [record for record in records if isinstance(record, dict)]
-        elif isinstance(state, dict):
-            records = [state]
+        records_by_pid: Dict[int, Mapping[str, Any]] = {}
+        status_records = (
+            status_document.get("sessions")
+            if isinstance(status_document, dict)
+            else None
+        )
+        if isinstance(status_records, list):
+            status_records = [
+                status_record
+                for status_record in status_records
+                if isinstance(status_record, dict)
+            ]
+        elif isinstance(status_document, dict):
+            status_records = [status_document]
         else:
-            records = []
+            status_records = []
 
-        for record in records:
-            if record.get("parent_id") or record.get("parentID"):
+        for status_record in status_records:
+            if status_record.get("parent_id") or status_record.get("parentID"):
                 continue
             try:
-                source_pid = int(record["source_pid"])
+                source_pid = int(status_record["source_pid"])
             except (KeyError, TypeError, ValueError):
                 continue
-            result[source_pid] = record
-        return result
+            records_by_pid[source_pid] = status_record
+        return records_by_pid
 
     def read(self) -> Dict[int, Mapping[str, Any]]:
-        if not os.path.isdir(self.path):
-            return self._read_file(self.path)
+        if not os.path.isdir(self.status_path):
+            return self._read_file(self.status_path)
 
-        result: Dict[int, Mapping[str, Any]] = {}
+        records_by_pid: Dict[int, Mapping[str, Any]] = {}
         try:
-            entries = os.scandir(self.path)
+            status_entries = os.scandir(self.status_path)
         except OSError:
-            return result
+            return records_by_pid
 
-        with entries:
-            for entry in entries:
-                if not entry.name.endswith(".json") or not entry.is_file():
+        with status_entries:
+            for status_entry in status_entries:
+                if not status_entry.name.endswith(".json") or not status_entry.is_file():
                     continue
-                result.update(self._read_file(entry.path))
-        return result
+                records_by_pid.update(self._read_file(status_entry.path))
+        return records_by_pid
 
 
 def process_stat(
@@ -370,18 +378,18 @@ def process_stat(
     proc_root: Union[os.PathLike, str] = "/proc",
 ) -> Tuple[Optional[int], int]:
     try:
-        path = os.path.join(os.fspath(proc_root), str(pid), "stat")
-        with open(path, encoding="utf-8") as stat_file:
-            fields = stat_file.read().rsplit(")", 1)[1].split()
-        return int(fields[1]), int(fields[19])
+        stat_path = os.path.join(os.fspath(proc_root), str(pid), "stat")
+        with open(stat_path, encoding="utf-8") as stat_file:
+            stat_fields = stat_file.read().rsplit(")", 1)[1].split()
+        return int(stat_fields[1]), int(stat_fields[19])
     except (OSError, IndexError, ValueError):
         return None, 0
 
 
 def read_boot_time(proc_root: Union[os.PathLike, str] = "/proc") -> float:
     try:
-        path = os.path.join(os.fspath(proc_root), "stat")
-        with open(path, encoding="utf-8") as stat_file:
+        proc_stat_path = os.path.join(os.fspath(proc_root), "stat")
+        with open(proc_stat_path, encoding="utf-8") as stat_file:
             for line in stat_file:
                 if line.startswith("btime "):
                     return float(line.split()[1])
@@ -410,43 +418,43 @@ class ProcProcessSource:
 
     def _comm(self, pid: int) -> Optional[str]:
         try:
-            path = os.path.join(self.proc_root, str(pid), "comm")
-            with open(path, encoding="utf-8") as comm_file:
+            comm_path = os.path.join(self.proc_root, str(pid), "comm")
+            with open(comm_path, encoding="utf-8") as comm_file:
                 return comm_file.read().strip()
         except OSError:
             return None
 
     def opencode_pids(self) -> Set[int]:
-        result: Set[int] = set()
+        opencode_pids: Set[int] = set()
         try:
-            entries = os.scandir(self.proc_root)
+            process_entries = os.scandir(self.proc_root)
         except OSError:
-            return result
+            return opencode_pids
 
-        with entries:
-            for entry in entries:
-                if not entry.name.isdigit():
+        with process_entries:
+            for process_entry in process_entries:
+                if not process_entry.name.isdigit():
                     continue
                 try:
-                    pid = int(entry.name)
+                    process_pid = int(process_entry.name)
                 except ValueError:
                     continue
-                if self._comm(pid) == "opencode":
-                    result.add(pid)
-        return result
+                if self._comm(process_pid) == "opencode":
+                    opencode_pids.add(process_pid)
+        return opencode_pids
 
     def ancestors(self, pid: int) -> List[int]:
-        result: List[int] = []
-        current = pid
-        seen: Set[int] = set()
-        while current > 1 and current not in seen:
-            result.append(current)
-            seen.add(current)
-            parent, _ = process_stat(current, self.proc_root)
-            if not parent:
+        ancestor_pids: List[int] = []
+        current_pid = pid
+        seen_pids: Set[int] = set()
+        while current_pid > 1 and current_pid not in seen_pids:
+            ancestor_pids.append(current_pid)
+            seen_pids.add(current_pid)
+            parent_pid, _ = process_stat(current_pid, self.proc_root)
+            if not parent_pid:
                 break
-            current = parent
-        return result
+            current_pid = parent_pid
+        return ancestor_pids
 
     def inspect(self, pid: int) -> Optional[ProcessInfo]:
         if self._comm(pid) != "opencode":
@@ -457,9 +465,9 @@ class ProcProcessSource:
         except (OSError, ValueError):
             return None
 
-        _, start_ticks = process_stat(pid, self.proc_root)
-        started_at = self.boot_time + start_ticks / self.clock_ticks
-        return ProcessInfo(pid, directory, started_at)
+        _, process_start_ticks = process_stat(pid, self.proc_root)
+        process_started_at = self.boot_time + process_start_ticks / self.clock_ticks
+        return ProcessInfo(pid, directory, process_started_at)
 
 
 class SessionFactory:
@@ -469,26 +477,28 @@ class SessionFactory:
         self,
         process: ProcessInfo,
         pane: Optional[TmuxPane],
-        tracked: Mapping[str, Any],
-        state: Optional[Union[SessionStatus, str]] = None,
+        status_record: Mapping[str, Any],
+        observed_state: Optional[Union[SessionStatus, str]] = None,
     ) -> Session:
-        current_status = SessionStatus.from_value(state)
+        current_status = SessionStatus.from_value(observed_state)
         if current_status is None:
-            current_status = SessionStatus.from_value(tracked.get("state"))
+            current_status = SessionStatus.from_value(status_record.get("state"))
         current_status = current_status or SessionStatus.IDLE
         return Session(
-            session_id=tracked.get("session_id", f"pid:{process.pid}"),
+            session_id=status_record.get("session_id", f"pid:{process.pid}"),
             project=os.path.basename(process.directory) or "OpenCode",
             state=current_status.value,
             tmux_pane=pane.id if pane else None,
-            tmux_socket=tracked.get("tmux_socket"),
+            tmux_socket=status_record.get("tmux_socket"),
             source_pid=process.pid,
             directory=process.directory,
-            notification_id=tracked.get("notification_id"),
-            attention=bool(tracked.get("attention")),
-            attention_since=tracked.get("attention_since"),
-            last_transition_ts=tracked.get("last_transition_ts", process.started_at),
-            preview=tracked.get("preview")
+            notification_id=status_record.get("notification_id"),
+            attention=bool(status_record.get("attention")),
+            attention_since=status_record.get("attention_since"),
+            last_transition_ts=status_record.get(
+                "last_transition_ts", process.started_at
+            ),
+            preview=status_record.get("preview")
             or DEFAULT_PREVIEWS.get(current_status.value, "idle"),
         )
 
@@ -511,33 +521,42 @@ class SessionCollector:
         self.state_registry = state_registry or SessionStateRegistry()
 
     def collect(self) -> List[Session]:
-        attention = self.attention_source.read()
+        status_records = self.attention_source.read()
         opencode_pids = self.process_source.opencode_pids()
         panes = self.terminal_source.panes()
         sessions: List[Session] = []
         active_pids: Set[int] = set()
 
-        for pid in sorted(opencode_pids):
-            ancestors = self.process_source.ancestors(pid)
-            if any(parent in opencode_pids for parent in ancestors[1:]):
+        for process_pid in sorted(opencode_pids):
+            process_ancestors = self.process_source.ancestors(process_pid)
+            if any(
+                parent_pid in opencode_pids
+                for parent_pid in process_ancestors[1:]
+            ):
                 continue
 
-            process = self.process_source.inspect(pid)
+            process = self.process_source.inspect(process_pid)
             if process is None:
                 continue
-            tracked = attention.get(pid, {})
-            if not self._matches_process(process, tracked):
-                tracked = {}
-            pane = next((pane for pane in panes if pane.pid in ancestors), None)
-            observed_status = tracked.get("state") if "state" in tracked else None
-            current_status = self.state_registry.observe(pid, observed_status)
-            active_pids.add(pid)
+            status_record = status_records.get(process_pid, {})
+            if not self._matches_process(process, status_record):
+                status_record = {}
+            pane = next(
+                (pane for pane in panes if pane.pid in process_ancestors), None
+            )
+            observed_status = (
+                status_record.get("state") if "state" in status_record else None
+            )
+            current_status = self.state_registry.observe(
+                process_pid, observed_status
+            )
+            active_pids.add(process_pid)
             sessions.append(
                 self.session_factory.create(
                     process,
                     pane,
-                    tracked,
-                    state=current_status,
+                    status_record,
+                    observed_state=current_status,
                 )
             )
 
@@ -547,13 +566,16 @@ class SessionCollector:
     @staticmethod
     def _matches_process(
         process: ProcessInfo,
-        tracked: Mapping[str, Any],
+        status_record: Mapping[str, Any],
     ) -> bool:
-        started_at = tracked.get("process_started_at")
-        if started_at is None:
+        recorded_process_started_at = status_record.get("process_started_at")
+        if recorded_process_started_at is None:
             return True
         try:
-            return abs(float(started_at) - process.started_at) <= PROCESS_START_TOLERANCE
+            return (
+                abs(float(recorded_process_started_at) - process.started_at)
+                <= PROCESS_START_TOLERANCE
+            )
         except (TypeError, ValueError):
             return False
 
@@ -567,22 +589,24 @@ class SnapshotService:
 
     def snapshot(self) -> Dict[str, Any]:
         sessions = [session.as_dict() for session in self.collector.collect()]
-        counts = dict(EMPTY_COUNTS)
-        counts["sessions"] = len(sessions)
-        counts["attention"] = sum(session["attention"] for session in sessions)
+        session_counts = dict(EMPTY_SESSION_COUNTS)
+        session_counts["sessions"] = len(sessions)
+        session_counts["attention"] = sum(
+            session["attention"] for session in sessions
+        )
         for session in sessions:
-            count_key = STATUS_COUNT_BUCKETS.get(session["state"])
-            if count_key:
-                counts[count_key] += 1
+            count_bucket = STATUS_COUNT_BUCKETS.get(session["state"])
+            if count_bucket:
+                session_counts[count_bucket] += 1
         return {
             "generated_ts": self.clock(),
-            "counts": counts,
+            "counts": session_counts,
             "sessions": sessions,
         }
 
 
-def command_succeeded(result: Any) -> bool:
-    return result is not None and getattr(result, "returncode", 0) == 0
+def command_succeeded(command_result: Any) -> bool:
+    return command_result is not None and getattr(command_result, "returncode", 0) == 0
 
 
 class TmuxClient:
@@ -600,10 +624,10 @@ class TmuxClient:
         self.client_ancestors = client_ancestors
         self.window_focus = window_focus
 
-    def _run(self, args: Sequence[str]) -> Any:
+    def _run(self, command_args: Sequence[str]) -> Any:
         try:
             return self.runner(
-                ["tmux", *args],
+                ["tmux", *command_args],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -614,16 +638,18 @@ class TmuxClient:
     def panes(self) -> List[TmuxPane]:
         if not self.executable_finder("tmux"):
             return []
-        result = self._run(["list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}"])
-        if result is None:
+        pane_list_result = self._run(
+            ["list-panes", "-a", "-F", "#{pane_id}\t#{pane_pid}"]
+        )
+        if pane_list_result is None:
             return []
 
         panes: List[TmuxPane] = []
-        for line in (getattr(result, "stdout", "") or "").splitlines():
-            parts = line.split("\t")
-            if len(parts) != 2:
+        for line in (getattr(pane_list_result, "stdout", "") or "").splitlines():
+            pane_fields = line.split("\t")
+            if len(pane_fields) != 2:
                 continue
-            pane_id, pane_pid = parts
+            pane_id, pane_pid = pane_fields
             try:
                 panes.append(TmuxPane(pane_id, int(pane_pid)))
             except ValueError:
@@ -639,25 +665,31 @@ class TmuxClient:
         if pane is None:
             return False
 
-        clients = self._run(["list-clients", "-F", "#{client_name}\t#{client_pid}"])
-        client = None
-        for line in (getattr(clients, "stdout", "") or "").splitlines():
-            parts = line.split("\t")
-            if not parts or not parts[0]:
+        client_list_result = self._run(
+            ["list-clients", "-F", "#{client_name}\t#{client_pid}"]
+        )
+        selected_client = None
+        for line in (
+            getattr(client_list_result, "stdout", "") or ""
+        ).splitlines():
+            client_fields = line.split("\t")
+            if not client_fields or not client_fields[0]:
                 continue
             client_pid = None
-            if len(parts) > 1:
+            if len(client_fields) > 1:
                 try:
-                    client_pid = int(parts[1])
+                    client_pid = int(client_fields[1])
                 except ValueError:
                     pass
-            client = (parts[0], client_pid)
+            selected_client = (client_fields[0], client_pid)
             break
 
-        if client:
-            client_name, client_pid = client
-            result = self._run(["switch-client", "-c", client_name, "-t", pane.id])
-            if not command_succeeded(result):
+        if selected_client:
+            client_name, client_pid = selected_client
+            focus_command_result = self._run(
+                ["switch-client", "-c", client_name, "-t", pane.id]
+            )
+            if not command_succeeded(focus_command_result):
                 return False
             # Switching panes does not raise the terminal window when the
             # widget lives on another workspace. Focus the tmux client itself,
@@ -670,8 +702,8 @@ class TmuxClient:
                 self.window_focus.focus(self.client_ancestors(client_pid))
             return True
         else:
-            result = self._run(["select-pane", "-t", pane.id])
-            return command_succeeded(result)
+            focus_command_result = self._run(["select-pane", "-t", pane.id])
+            return command_succeeded(focus_command_result)
 
 
 class HyprlandClient:
@@ -690,13 +722,13 @@ class HyprlandClient:
             return False
 
         try:
-            result = self.runner(
+            client_list_result = self.runner(
                 ["hyprctl", "clients", "-j"],
                 capture_output=True,
                 text=True,
                 check=True,
             )
-            clients = json.loads(result.stdout)
+            client_records = json.loads(client_list_result.stdout)
         except (
             OSError,
             subprocess.CalledProcessError,
@@ -706,33 +738,36 @@ class HyprlandClient:
         ):
             return False
 
-        if not isinstance(clients, list):
+        if not isinstance(client_records, list):
             return False
         ancestor_set = set(ancestors)
-        for client in clients:
-            if not isinstance(client, dict):
+        for client_record in client_records:
+            if not isinstance(client_record, dict):
                 continue
-            if client.get("pid") not in ancestor_set or not client.get("address"):
+            if (
+                client_record.get("pid") not in ancestor_set
+                or not client_record.get("address")
+            ):
                 continue
             try:
-                result = self.runner(
+                focus_command_result = self.runner(
                     [
                         "hyprctl",
                         "dispatch",
-                        f'hl.dsp.focus({{ window = "address:{client["address"]}" }})',
+                        f'hl.dsp.focus({{ window = "address:{client_record["address"]}" }})',
                     ],
                     check=False,
                 )
             except OSError:
                 return False
-            return command_succeeded(result)
+            return command_succeeded(focus_command_result)
         return False
 
 
 def parse_pid(target: Any) -> Optional[int]:
     try:
-        value = str(target)
-        return int(value.removeprefix("pid:"))
+        target_text = str(target)
+        return int(target_text.removeprefix("pid:"))
     except (TypeError, ValueError):
         return None
 
@@ -745,74 +780,86 @@ class FocusService:
         self.targets = targets
 
     def focus(self, target: Any) -> bool:
-        pid = parse_pid(target)
-        if pid is None:
+        process_pid = parse_pid(target)
+        if process_pid is None:
             return False
-        ancestors = self.process_source.ancestors(pid)
-        return any(target.focus(ancestors) for target in self.targets)
+        process_ancestors = self.process_source.ancestors(process_pid)
+        return any(
+            focus_target.focus(process_ancestors) for focus_target in self.targets
+        )
 
 
-def snapshot_signature(state: Mapping[str, Any]) -> str:
+def snapshot_signature(snapshot: Mapping[str, Any]) -> str:
     """Exclude the changing generation time but include every visible value."""
 
     return json.dumps(
         {
-            "counts": state.get("counts", {}),
-            "sessions": state.get("sessions", []),
+            "counts": snapshot.get("counts", {}),
+            "sessions": snapshot.get("sessions", []),
         },
         sort_keys=True,
         separators=(",", ":"),
     )
 
 
-def session_identity(session: Mapping[str, Any]) -> str:
+def session_identity(session_record: Mapping[str, Any]) -> str:
     """Return a stable identity for a session in the cycle state file."""
 
-    session_id = session.get("session_id")
+    session_id = session_record.get("session_id")
     if session_id is not None and str(session_id):
         return "session:" + str(session_id)
-    source_pid = session.get("source_pid")
+    source_pid = session_record.get("source_pid")
     if source_pid is not None:
         return "pid:" + str(source_pid)
     return ""
 
 
 def focus_candidates_for_state(
-    state: Mapping[str, Any], requested_state: str
+    snapshot: Mapping[str, Any], requested_bucket: str
 ) -> List[Mapping[str, Any]]:
-    wanted_state = FOCUS_STATE_ALIASES[requested_state]
-    sessions = state.get("sessions", [])
-    if not isinstance(sessions, list):
+    target_status = FOCUS_STATE_ALIASES[requested_bucket]
+    session_records = snapshot.get("sessions", [])
+    if not isinstance(session_records, list):
         return []
 
     candidates = [
-        session
-        for session in sessions
-        if isinstance(session, Mapping)
-        and session.get("state") == wanted_state
-        and (wanted_state in ("WORKING", "IDLE") or session.get("attention"))
+        session_record
+        for session_record in session_records
+        if isinstance(session_record, Mapping)
+        and session_record.get("state") == target_status
+        and (
+            target_status in ("WORKING", "IDLE")
+            or session_record.get("attention")
+        )
     ]
 
-    def attention_time(session: Mapping[str, Any]) -> float:
-        value = session.get("attention_since") or session.get("last_transition_ts")
+    def attention_time(session_record: Mapping[str, Any]) -> float:
+        timestamp_value = session_record.get("attention_since") or session_record.get(
+            "last_transition_ts"
+        )
         try:
-            return float(value)
+            return float(timestamp_value)
         except (TypeError, ValueError):
             return 0.0
 
     # The timestamp keeps the existing oldest-attention-first behavior. The
     # identity tie-breaker prevents the cycle order changing between snapshots
     # when two sessions transition at the same time.
-    candidates.sort(key=lambda session: (attention_time(session), session_identity(session)))
+    candidates.sort(
+        key=lambda session_record: (
+            attention_time(session_record),
+            session_identity(session_record),
+        )
+    )
     return candidates
 
 
 def focus_session_for_state(
-    state: Mapping[str, Any],
-    requested_state: str,
+    snapshot: Mapping[str, Any],
+    requested_bucket: str,
     previous_identity: Optional[str] = None,
 ) -> Optional[Mapping[str, Any]]:
-    candidates = focus_candidates_for_state(state, requested_state)
+    candidates = focus_candidates_for_state(snapshot, requested_bucket)
     if not candidates:
         return None
 
@@ -826,14 +873,16 @@ def focus_session_for_state(
 
 
 def focus_target_for_state(
-    state: Mapping[str, Any],
-    requested_state: str,
+    snapshot: Mapping[str, Any],
+    requested_bucket: str,
     previous_identity: Optional[str] = None,
 ) -> Optional[Any]:
-    session = focus_session_for_state(state, requested_state, previous_identity)
-    if session is None:
+    selected_session = focus_session_for_state(
+        snapshot, requested_bucket, previous_identity
+    )
+    if selected_session is None:
         return None
-    return session.get("source_pid") or session.get("session_id")
+    return selected_session.get("source_pid") or selected_session.get("session_id")
 
 
 class FocusCycleStore:
@@ -857,30 +906,30 @@ class FocusCycleStore:
 
     def _read(self) -> Dict[str, str]:
         try:
-            with open(self.path, encoding="utf-8") as state_file:
-                state = json.load(state_file)
+            with open(self.path, encoding="utf-8") as cycle_state_file:
+                cycle_state_document = json.load(cycle_state_file)
         except (OSError, ValueError, TypeError):
             return {}
-        if not isinstance(state, dict):
+        if not isinstance(cycle_state_document, dict):
             return {}
         return {
-            str(status): str(identity)
-            for status, identity in state.items()
+            str(status_bucket): str(identity)
+            for status_bucket, identity in cycle_state_document.items()
             if identity is not None
         }
 
-    def _write(self, state: Mapping[str, str]) -> None:
+    def _write(self, cycle_state: Mapping[str, str]) -> None:
         directory = os.path.dirname(self.path) or "."
         temporary_path = None
         try:
             descriptor, temporary_path = tempfile.mkstemp(
                 prefix=".opencode-focus-", dir=directory, text=True
             )
-            with os.fdopen(descriptor, "w", encoding="utf-8") as state_file:
-                json.dump(state, state_file, separators=(",", ":"))
-                state_file.write("\n")
-                state_file.flush()
-                os.fsync(state_file.fileno())
+            with os.fdopen(descriptor, "w", encoding="utf-8") as cycle_state_file:
+                json.dump(cycle_state, cycle_state_file, separators=(",", ":"))
+                cycle_state_file.write("\n")
+                cycle_state_file.flush()
+                os.fsync(cycle_state_file.fileno())
             os.replace(temporary_path, self.path)
             temporary_path = None
         finally:
@@ -892,33 +941,35 @@ class FocusCycleStore:
 
     def _focus_locked(
         self,
-        state: Mapping[str, Any],
-        requested_state: str,
-        focus: Callable[[Any], bool],
+        snapshot: Mapping[str, Any],
+        requested_bucket: str,
+        focus_session: Callable[[Any], bool],
     ) -> bool:
         cycle_state = self._read()
-        selected = focus_session_for_state(
-            state, requested_state, cycle_state.get(requested_state)
+        selected_session = focus_session_for_state(
+            snapshot, requested_bucket, cycle_state.get(requested_bucket)
         )
-        if selected is None:
-            cycle_state.pop(requested_state, None)
+        if selected_session is None:
+            cycle_state.pop(requested_bucket, None)
             try:
                 self._write(cycle_state)
             except OSError:
                 pass
             return False
 
-        target = selected.get("source_pid") or selected.get("session_id")
-        if target is None:
+        session_target = selected_session.get("source_pid") or selected_session.get(
+            "session_id"
+        )
+        if session_target is None:
             return False
         try:
-            focused = focus(target)
+            focus_succeeded = focus_session(session_target)
         except OSError:
-            focused = False
-        if not focused:
+            focus_succeeded = False
+        if not focus_succeeded:
             return False
 
-        cycle_state[requested_state] = session_identity(selected)
+        cycle_state[requested_bucket] = session_identity(selected_session)
         try:
             self._write(cycle_state)
         except OSError:
@@ -929,21 +980,23 @@ class FocusCycleStore:
 
     def focus(
         self,
-        state: Mapping[str, Any],
-        requested_state: str,
-        focus: Callable[[Any], bool],
+        snapshot: Mapping[str, Any],
+        requested_bucket: str,
+        focus_session: Callable[[Any], bool],
     ) -> bool:
         try:
             with self._lock():
-                return self._focus_locked(state, requested_state, focus)
+                return self._focus_locked(
+                    snapshot, requested_bucket, focus_session
+                )
         except OSError:
             # The runtime directory may be unavailable during shutdown. Keep
             # the shortcut useful by focusing the first match without cycling.
-            target = focus_target_for_state(state, requested_state)
-            if target is None:
+            session_target = focus_target_for_state(snapshot, requested_bucket)
+            if session_target is None:
                 return False
             try:
-                return focus(target)
+                return focus_session(session_target)
             except OSError:
                 return False
 
@@ -966,11 +1019,11 @@ class SnapshotStreamer:
     def run(self, once: bool = False) -> int:
         last_signature = None
         while True:
-            state = self.snapshot_source.snapshot()
-            signature = snapshot_signature(state)
-            if signature != last_signature:
-                self.emit(json.dumps(state, separators=(",", ":")))
-                last_signature = signature
+            snapshot = self.snapshot_source.snapshot()
+            current_signature = snapshot_signature(snapshot)
+            if current_signature != last_signature:
+                self.emit(json.dumps(snapshot, separators=(",", ":")))
+                last_signature = current_signature
             if once:
                 return 0
             self.sleep(self.interval)
@@ -985,7 +1038,7 @@ def build_runtime() -> Tuple[SnapshotService, FocusService]:
     )
     collector = SessionCollector(
         process_source,
-        AttentionStateReader(STATUS_STATE_FILE),
+        AttentionStateReader(STATUS_RECORD_PATH),
         terminal_source,
     )
     return SnapshotService(collector), FocusService(
@@ -1006,7 +1059,7 @@ def main(
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--focus")
     parser.add_argument("--focus-state", choices=tuple(FOCUS_STATE_ALIASES))
-    args = parser.parse_args(argv)
+    arguments = parser.parse_args(argv)
 
     if snapshot_source is None or focus_service is None:
         default_snapshot_source, default_focus_service = build_runtime()
@@ -1015,19 +1068,19 @@ def main(
         if focus_service is None:
             focus_service = default_focus_service
 
-    if args.focus is not None:
-        return 0 if focus_service.focus(args.focus) else 1
-    if args.focus_state is not None:
+    if arguments.focus is not None:
+        return 0 if focus_service.focus(arguments.focus) else 1
+    if arguments.focus_state is not None:
         return 0 if FocusCycleStore(FOCUS_CYCLE_STATE_FILE).focus(
-            snapshot_source.snapshot(), args.focus_state, focus_service.focus
+            snapshot_source.snapshot(), arguments.focus_state, focus_service.focus
         ) else 1
 
     return SnapshotStreamer(
         snapshot_source,
-        interval=args.interval,
+        interval=arguments.interval,
         sleep=sleep,
         emit=emit,
-    ).run(once=args.once)
+    ).run(once=arguments.once)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,67 @@ const SessionStatus = Object.freeze({
   NEEDS_APPROVAL: "NEEDS_APPROVAL",
 });
 
+const DEFAULT_PREVIEWS = Object.freeze({
+  IDLE: "idle",
+  WORKING: "working",
+  WAITING: "waiting for response",
+  NEEDS_APPROVAL: "waiting for permission",
+});
+
+function textValue(candidateText) {
+  return typeof candidateText === "string" && candidateText.trim()
+    ? candidateText.trim()
+    : "";
+}
+
+function permissionPreview(properties) {
+  const nestedPermissionProperties = properties?.permission;
+  const permissionProperties =
+    nestedPermissionProperties && typeof nestedPermissionProperties === "object"
+      ? { ...properties, ...nestedPermissionProperties }
+      : properties || {};
+  const title = textValue(permissionProperties.title);
+  const requestedOperation =
+    title ||
+    textValue(permissionProperties.permission) ||
+    textValue(permissionProperties.type);
+  const patternValues = permissionProperties.patterns ?? permissionProperties.pattern;
+  const patternText = Array.isArray(patternValues)
+    ? patternValues.map(textValue).filter(Boolean).join(", ")
+    : textValue(patternValues);
+
+  if (!requestedOperation) return patternText || null;
+  return patternText
+    ? `${requestedOperation}: ${patternText}`
+    : requestedOperation;
+}
+
+function questionPreview(properties) {
+  const directQuestion = textValue(
+    properties?.question || properties?.prompt || properties?.message,
+  );
+  if (directQuestion) return directQuestion;
+
+  const questionEntries = Array.isArray(properties?.questions)
+    ? properties.questions
+    : [];
+  for (const questionEntry of questionEntries) {
+    const questionText = textValue(
+      questionEntry?.question || questionEntry?.prompt || questionEntry?.message,
+    );
+    if (questionText) return questionText;
+  }
+  return null;
+}
+
+function eventPreview(event) {
+  if (event?.type === "permission.asked" || event?.type === "permission.updated") {
+    return permissionPreview(event.properties);
+  }
+  if (event?.type === "question.asked") return questionPreview(event.properties);
+  return null;
+}
+
 const DEFAULT_TRANSITIONS = Object.freeze({
   IDLE: Object.freeze(["WORKING", "WAITING", "NEEDS_APPROVAL"]),
   WORKING: Object.freeze(["IDLE", "NEEDS_APPROVAL", "WAITING"]),
@@ -42,9 +103,9 @@ const DEFAULT_TRANSITIONS = Object.freeze({
 class TransitionPolicy {
   constructor(transitions = DEFAULT_TRANSITIONS) {
     this.transitions = new Map(
-      Object.entries(transitions).map(([state, targets]) => [
-        state,
-        new Set(targets),
+      Object.entries(transitions).map(([currentState, targetStates]) => [
+        currentState,
+        new Set(targetStates),
       ]),
     );
   }
@@ -63,16 +124,18 @@ class LifecycleStateMachine {
     policy = new TransitionPolicy(),
   } = {}) {
     this.policy = policy;
-    this.state = initialState;
+    this.currentStateValue = initialState;
   }
 
   get currentState() {
-    return this.state;
+    return this.currentStateValue;
   }
 
   transitionTo(targetState) {
-    if (!this.policy.canTransition(this.state, targetState)) return false;
-    this.state = targetState;
+    if (!this.policy.canTransition(this.currentStateValue, targetState)) {
+      return false;
+    }
+    this.currentStateValue = targetState;
     return true;
   }
 }
@@ -121,7 +184,7 @@ class StatusRecordBuilder {
     directory,
     processId = process.pid,
     environment = process.env,
-    processStartedAt: startedAt = defaultProcessStartedAt,
+    processStartedAt = defaultProcessStartedAt,
     clock = () => Date.now() / 1000,
   }) {
     this.project =
@@ -132,10 +195,12 @@ class StatusRecordBuilder {
     this.directory = directory || "";
     this.processId = processId;
     this.environment = environment;
-    this.processStartedAt = startedAt;
+    this.processStartedAt = processStartedAt;
     this.clock = clock;
     this.sessionId = null;
-    this.lastTransitionAt = startedAt;
+    this.lastTransitionAt = processStartedAt;
+    this.lastSessionState = null;
+    this.preview = null;
   }
 
   updateSessionId(event) {
@@ -150,28 +215,35 @@ class StatusRecordBuilder {
     this.lastTransitionAt = this.clock();
   }
 
-  build(state, event) {
-    const now = this.clock();
-    const attention =
-      state === SessionStatus.WAITING ||
-      state === SessionStatus.NEEDS_APPROVAL;
+  build(sessionState, event) {
+    const currentTimestamp = this.clock();
+    const requiresAttention =
+      sessionState === SessionStatus.WAITING ||
+      sessionState === SessionStatus.NEEDS_APPROVAL;
+    const previewText = eventPreview(event);
+    if (previewText) {
+      this.preview = previewText;
+    } else if (this.lastSessionState !== sessionState || !this.preview) {
+      this.preview = DEFAULT_PREVIEWS[sessionState] || "idle";
+    }
+    this.lastSessionState = sessionState;
 
     return {
       session_id: this.updateSessionId(event),
       project: this.project,
-      state,
+      state: sessionState,
       tmux_pane: this.environment.TMUX_PANE || null,
       tmux_socket: this.environment.TMUX || null,
       source_pid: this.processId,
       process_started_at: this.processStartedAt,
       directory: this.directory,
       notification_id: null,
-      attention,
-      attention_since: attention ? this.lastTransitionAt : null,
-      last_transition_ts: this.lastTransitionAt || now,
-      preview: state.toLowerCase().replaceAll("_", " "),
+      attention: requiresAttention,
+      attention_since: requiresAttention ? this.lastTransitionAt : null,
+      last_transition_ts: this.lastTransitionAt || currentTimestamp,
+      preview: this.preview,
       event_type: event?.type || null,
-      updated_at: now,
+      updated_at: currentTimestamp,
     };
   }
 }
@@ -278,11 +350,11 @@ class OpenCodeStatusReporter {
   updatePendingRequest(event) {
     const sessionId = this.sessionIdFor(event) || "__unknown__";
     const requestId = String(this.requestIdFor(event));
-    const pending = this.pendingRequests.get(sessionId) || new Set();
+    const pendingRequestIds = this.pendingRequests.get(sessionId) || new Set();
 
     if (event?.type === "permission.asked" || event?.type === "permission.updated" || event?.type === "question.asked") {
-      pending.add(requestId);
-      this.pendingRequests.set(sessionId, pending);
+      pendingRequestIds.add(requestId);
+      this.pendingRequests.set(sessionId, pendingRequestIds);
       return;
     }
 
@@ -290,9 +362,9 @@ class OpenCodeStatusReporter {
       return;
     }
 
-    pending.delete(requestId);
-    if (pending.size === 0) this.pendingRequests.delete(sessionId);
-    else this.pendingRequests.set(sessionId, pending);
+    pendingRequestIds.delete(requestId);
+    if (pendingRequestIds.size === 0) this.pendingRequests.delete(sessionId);
+    else this.pendingRequests.set(sessionId, pendingRequestIds);
   }
 
   hasPendingRequest(event) {
@@ -303,10 +375,10 @@ class OpenCodeStatusReporter {
   }
 
   async handle(event) {
-    const nextState = this.eventMapper.stateFor(event);
+    const mappedState = this.eventMapper.stateFor(event);
     const isIdleEvent =
       event?.type === "session.idle" ||
-      (event?.type === "session.status" && nextState === SessionStatus.IDLE);
+      (event?.type === "session.status" && mappedState === SessionStatus.IDLE);
 
     if (isIdleEvent && this.hasPendingRequest(event)) return;
 
@@ -320,17 +392,23 @@ class OpenCodeStatusReporter {
       return;
     }
 
-    let changed = false;
-    if (nextState && nextState !== this.stateMachine.currentState) {
-      if (!this.stateMachine.transitionTo(nextState)) return;
+    const isPreviewEvent =
+      event?.type === "permission.asked" ||
+      event?.type === "permission.updated" ||
+      event?.type === "question.asked";
+
+    let stateChanged = false;
+    if (mappedState && mappedState !== this.stateMachine.currentState) {
+      if (!this.stateMachine.transitionTo(mappedState)) return;
       this.recordBuilder.markTransition();
-      changed = true;
+      stateChanged = true;
     }
 
     if (
-      changed ||
+      stateChanged ||
       event?.type === "session.created" ||
-      event?.type === "session.updated"
+      event?.type === "session.updated" ||
+      isPreviewEvent
     ) {
       this.recordWriter.write(
         this.recordBuilder.build(this.stateMachine.currentState, event),
