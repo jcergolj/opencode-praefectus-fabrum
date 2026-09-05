@@ -21,6 +21,10 @@ The counts are clickable. Click the total to open the complete session list.
 Click a status count to open its filtered list. Click a session row to focus its
 terminal or tmux pane.
 
+When the session list is open, expand `Settings` to toggle colored counter
+numbers. Turn the option off to show every counter number in white. The choice
+is saved in the widget configuration.
+
 The widget watches live top-level `opencode` processes. Nested OpenCode
 processes created by subagents are ignored. A new process starts as idle until
 its status is reported.

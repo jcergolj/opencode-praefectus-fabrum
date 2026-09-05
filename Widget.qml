@@ -54,8 +54,8 @@ Panel {
     return Number(counts[bucket] || 0)
   }
 
-  function countColor(bucket, count) {
-    if (!coloredCounts) return count > 0 ? foreground : dim
+  function countColor(bucket) {
+    if (!coloredCounts) return foreground
     if (bucket === "all") return foreground
     if (bucket === "working") return workingColor
     if (bucket === "response") return responseColor
@@ -93,10 +93,11 @@ Panel {
 
   function bucketFor(session) {
     if (!session) return ""
-    if (session.state === "WORKING") return "working"
-    if (session.state === "WAITING") return "response"
-    if (session.state === "NEEDS_APPROVAL") return "permission"
-    if (session.state === "IDLE") return "idle"
+    var state = String(session.state || "").trim().toUpperCase()
+    if (state === "WORKING") return "working"
+    if (state === "WAITING") return "response"
+    if (state === "NEEDS_APPROVAL") return "permission"
+    if (state === "IDLE") return "idle"
     return ""
   }
 
@@ -218,7 +219,7 @@ Panel {
     bar: root.bar
     text: value
     fontSize: Style.font.bodySmall
-    foreground: root.countColor(bucket, Number(value))
+    foreground: root.countColor(bucket)
     horizontalMargin: 0
     verticalPadding: 0
     implicitHeight: root.bar ? root.bar.barSize : Style.bar.sizeHorizontal
@@ -513,34 +514,18 @@ Panel {
             width: parent.width
             spacing: Style.space(6)
 
-            Text {
+            Toggle {
               width: parent.width
-              text: "Counter numbers"
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
-
-            Row {
-              spacing: Style.space(6)
-
-              Button {
-                text: "Colored"
-                selected: root.coloredCounts
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                fontSize: Style.font.caption
-                onClicked: root.setColoredCounts(true)
-              }
-
-              Button {
-                text: "White"
-                selected: !root.coloredCounts
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                fontSize: Style.font.caption
-                onClicked: root.setColoredCounts(false)
-              }
+              label: "Colored counter numbers"
+              description: root.coloredCounts
+                ? "Use a different color for each status."
+                : "Use white numbers for every status."
+              checked: root.coloredCounts
+              fontFamily: root.fontFamily
+              titleSize: Style.font.bodySmall
+              descriptionSize: Style.font.caption
+              foreground: root.foreground
+              onClicked: root.setColoredCounts(!root.coloredCounts)
             }
           }
         }

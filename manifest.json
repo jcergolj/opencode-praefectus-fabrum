@@ -25,9 +25,9 @@
       {
         "key": "coloredCounts",
         "type": "boolean",
-        "label": "Color status counts",
+        "label": "Use colored counter numbers",
         "defaultValue": true,
-        "description": "Use status colors for working and attention counts."
+        "description": "Show status colors instead of white counter numbers."
       }
     ]
   }
