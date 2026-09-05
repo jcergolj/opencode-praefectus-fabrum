@@ -21,6 +21,9 @@ The counts are clickable. Click the total to open the complete session list.
 Click a status count to open its filtered list. Click a session row to focus its
 terminal or tmux pane.
 
+Expand a session row to see its latest context-window percentage when OpenCode
+provides model and token usage metadata.
+
 When the session list is open, expand `Settings` to toggle colored counter
 numbers. Turn the option off to show every counter number in white. The choice
 is saved in the widget configuration.

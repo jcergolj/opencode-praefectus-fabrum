@@ -117,6 +117,9 @@ class Session:
     attention_since: Any
     last_transition_ts: Any
     preview: Any
+    context_tokens: Any = None
+    context_limit: Any = None
+    context_percentage: Any = None
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -132,6 +135,9 @@ class Session:
             "attention_since": self.attention_since,
             "last_transition_ts": self.last_transition_ts,
             "preview": self.preview,
+            "context_tokens": self.context_tokens,
+            "context_limit": self.context_limit,
+            "context_percentage": self.context_percentage,
         }
 
 
@@ -501,6 +507,9 @@ class SessionFactory:
             ),
             preview=status_record.get("preview")
             or DEFAULT_PREVIEWS.get(current_status.value, "idle"),
+            context_tokens=status_record.get("context_tokens"),
+            context_limit=status_record.get("context_limit"),
+            context_percentage=status_record.get("context_percentage"),
         )
 
 

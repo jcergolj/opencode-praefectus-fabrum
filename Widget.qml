@@ -179,6 +179,12 @@ Panel {
     return statusLabel(session.state)
   }
 
+  function contextUsageLabel(session) {
+    var contextPercentage = Number(session.context_percentage)
+    if (!isFinite(contextPercentage)) return "context usage unavailable"
+    return "context " + Math.round(contextPercentage) + "% used"
+  }
+
   function parseState(inputText) {
     try {
       var parsedSnapshot = JSON.parse(String(inputText || ""))
@@ -376,7 +382,7 @@ Panel {
               readonly property bool expanded: root.expandedSessionId === modelData.session_id
               readonly property bool selected: index === root.selectedSessionIndex
               width: panelColumn.width
-              height: expanded ? Style.space(104) : Style.space(60)
+              height: expanded ? Style.space(120) : Style.space(60)
 
               Rectangle {
                 anchors.fill: parent
@@ -451,6 +457,15 @@ Panel {
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     elide: Text.ElideMiddle
+                  }
+
+                  Text {
+                    visible: expanded
+                    width: parent.width
+                    text: root.contextUsageLabel(modelData)
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
                   }
                 }
 

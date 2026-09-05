@@ -83,6 +83,95 @@ function eventPreview(event) {
   return null;
 }
 
+function finiteNonNegativeNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function contextTokensFor(info) {
+  const tokens = info?.tokens;
+  if (!tokens || typeof tokens !== "object") return null;
+
+  const total = finiteNonNegativeNumber(tokens.total);
+  if (total !== null) return total;
+
+  const tokenValues = [
+    tokens.input,
+    tokens.output,
+    tokens.reasoning,
+    tokens.cache?.read,
+    tokens.cache?.write,
+  ];
+  if (tokenValues.every((value) => value === undefined || value === null)) {
+    return null;
+  }
+  return tokenValues.reduce(
+    (sum, value) => sum + (finiteNonNegativeNumber(value) || 0),
+    0,
+  );
+}
+
+function contextLimitFor(providers, providerId, modelId) {
+  for (const provider of providers || []) {
+    if (String(provider?.id || "") !== String(providerId || "")) continue;
+    const model =
+      provider?.models?.[modelId] ||
+      Object.values(provider?.models || {}).find(
+        (candidate) => String(candidate?.id || "") === String(modelId),
+      );
+    const limit = finiteNonNegativeNumber(model?.limit?.context);
+    if (limit !== null && limit > 0) return limit;
+  }
+  return null;
+}
+
+class ContextLimitResolver {
+  constructor({ client }) {
+    this.client = client;
+    this.providersPromise = null;
+  }
+
+  async readProviders(request) {
+    try {
+      return await request();
+    } catch {
+      return null;
+    }
+  }
+
+  async providers() {
+    if (!this.providersPromise) {
+      this.providersPromise = Promise.all([
+        typeof this.client?.config?.providers === "function"
+          ? this.readProviders(() => this.client.config.providers())
+          : Promise.resolve(null),
+        typeof this.client?.provider?.list === "function"
+          ? this.readProviders(() => this.client.provider.list())
+          : Promise.resolve(null),
+      ]).then(([configuredResponse, allResponse]) => {
+        const configuredData = configuredResponse?.data || configuredResponse;
+        const allData = allResponse?.data || allResponse;
+        const configuredProviders = configuredData?.providers;
+        const allProviders = allData?.all;
+        return [
+          ...(Array.isArray(configuredProviders) ? configuredProviders : []),
+          ...(Array.isArray(allProviders) ? allProviders : []),
+        ];
+      });
+    }
+    return this.providersPromise;
+  }
+
+  async limitFor(info) {
+    if (!info?.providerID || !info?.modelID) return null;
+    return contextLimitFor(
+      await this.providers(),
+      info.providerID,
+      info.modelID,
+    );
+  }
+}
+
 const DEFAULT_TRANSITIONS = Object.freeze({
   IDLE: Object.freeze(["WORKING", "WAITING", "NEEDS_APPROVAL"]),
   WORKING: Object.freeze(["IDLE", "NEEDS_APPROVAL", "WAITING"]),
@@ -201,18 +290,41 @@ class StatusRecordBuilder {
     this.lastTransitionAt = processStartedAt;
     this.lastSessionState = null;
     this.preview = null;
+    this.contextUsage = null;
   }
 
   updateSessionId(event) {
     const properties = event?.properties || {};
     const sessionId =
-      properties.sessionID || properties.sessionId || this.sessionId || null;
+      properties.sessionID ||
+      properties.sessionId ||
+      properties.info?.sessionID ||
+      properties.info?.sessionId ||
+      properties.info?.id ||
+      this.sessionId ||
+      null;
     if (sessionId) this.sessionId = String(sessionId);
     return this.sessionId;
   }
 
   markTransition() {
     this.lastTransitionAt = this.clock();
+  }
+
+  updateContextUsage(info, contextLimit) {
+    const contextTokens = contextTokensFor(info);
+    const contextSize = finiteNonNegativeNumber(contextLimit);
+    const nextContextUsage =
+      contextTokens === null || contextSize === null || contextSize === 0
+        ? null
+        : {
+            context_tokens: contextTokens,
+            context_limit: contextSize,
+            context_percentage: Math.round((contextTokens / contextSize) * 100),
+          };
+    const previousContextUsage = this.contextUsage;
+    this.contextUsage = nextContextUsage;
+    return JSON.stringify(previousContextUsage) !== JSON.stringify(nextContextUsage);
   }
 
   build(sessionState, event) {
@@ -244,6 +356,7 @@ class StatusRecordBuilder {
       preview: this.preview,
       event_type: event?.type || null,
       updated_at: currentTimestamp,
+      ...(this.contextUsage || {}),
     };
   }
 }
@@ -314,11 +427,13 @@ class OpenCodeStatusReporter {
     eventMapper,
     recordBuilder,
     recordWriter,
+    contextLimitFor: resolveContextLimit = async () => null,
   }) {
     this.stateMachine = stateMachine;
     this.eventMapper = eventMapper;
     this.recordBuilder = recordBuilder;
     this.recordWriter = recordWriter;
+    this.resolveContextLimit = resolveContextLimit;
     this.pendingRequests = new Map();
     this.requestSequence = 0;
   }
@@ -392,6 +507,21 @@ class OpenCodeStatusReporter {
       return;
     }
 
+    let contextUsageChanged = false;
+    const messageInfo = event?.type === "message.updated" ? event.properties?.info : null;
+    if (messageInfo?.role === "assistant" && typeof this.recordBuilder.updateContextUsage === "function") {
+      let contextLimit = null;
+      try {
+        contextLimit = await this.resolveContextLimit(messageInfo);
+      } catch {
+        contextLimit = null;
+      }
+      contextUsageChanged = this.recordBuilder.updateContextUsage(
+        messageInfo,
+        contextLimit,
+      );
+    }
+
     const isPreviewEvent =
       event?.type === "permission.asked" ||
       event?.type === "permission.updated" ||
@@ -408,7 +538,8 @@ class OpenCodeStatusReporter {
       stateChanged ||
       event?.type === "session.created" ||
       event?.type === "session.updated" ||
-      isPreviewEvent
+      isPreviewEvent ||
+      contextUsageChanged
     ) {
       this.recordWriter.write(
         this.recordBuilder.build(this.stateMachine.currentState, event),
@@ -421,8 +552,9 @@ class OpenCodeStatusReporter {
   }
 }
 
-async function server({ project, directory }) {
+async function server({ project, directory, client }) {
   const recordPath = path.join(statusDir, `${process.pid}.json`);
+  const contextLimitResolver = new ContextLimitResolver({ client });
   const reporter = new OpenCodeStatusReporter({
     stateMachine: new LifecycleStateMachine(),
     eventMapper: new EventStateMapper(),
@@ -435,6 +567,7 @@ async function server({ project, directory }) {
       directory: statusDir,
       recordPath,
     }),
+    contextLimitFor: (info) => contextLimitResolver.limitFor(info),
   });
 
   return {
@@ -445,12 +578,15 @@ async function server({ project, directory }) {
 
 export {
   AtomicStatusRecordWriter,
+  ContextLimitResolver,
   EventStateMapper,
   LifecycleStateMachine,
   OpenCodeStatusReporter,
   SessionStatus,
   StatusRecordBuilder,
   TransitionPolicy,
+  contextLimitFor,
+  contextTokensFor,
 };
 
 export default {

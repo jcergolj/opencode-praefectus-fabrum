@@ -309,6 +309,9 @@ class SnapshotServiceTests(unittest.TestCase):
                     "attention": True,
                     "attention_since": 90,
                     "preview": "Answer the question",
+                    "context_tokens": 1300,
+                    "context_limit": 10000,
+                    "context_percentage": 13,
                 },
                 303: {"session_id": "beta", "state": "IDLE"},
             }
@@ -336,6 +339,9 @@ class SnapshotServiceTests(unittest.TestCase):
         )
         self.assertEqual(state["sessions"][0]["tmux_pane"], "%1")
         self.assertEqual(state["sessions"][1]["state"], "IDLE")
+        self.assertEqual(state["sessions"][0]["context_tokens"], 1300)
+        self.assertEqual(state["sessions"][0]["context_limit"], 10000)
+        self.assertEqual(state["sessions"][0]["context_percentage"], 13)
         self.assertEqual(terminal.pane_call_count, 2)
 
     def test_untracked_process_defaults_to_idle(self):

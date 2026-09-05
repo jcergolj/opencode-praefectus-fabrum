@@ -58,6 +58,80 @@ test("event mapper translates OpenCode events into domain states", () => {
   assert.equal(stateMapper.stateFor({ type: "session.updated" }), null);
 });
 
+test("context usage helpers calculate tokens and resolve model limits", () => {
+  assert.equal(
+    plugin.contextTokensFor({
+      tokens: {
+        input: 100,
+        output: 20,
+        reasoning: 5,
+        cache: { read: 30, write: 10 },
+      },
+    }),
+    165,
+  );
+  assert.equal(
+    plugin.contextTokensFor({ tokens: { total: 42, input: 100 } }),
+    42,
+  );
+  assert.equal(plugin.contextTokensFor({}), null);
+  assert.equal(
+    plugin.contextLimitFor(
+      [
+        {
+          id: "demo",
+          models: { "model-1": { limit: { context: 8192 } } },
+        },
+      ],
+      "demo",
+      "model-1",
+    ),
+    8192,
+  );
+  assert.equal(plugin.contextLimitFor([], "demo", "model-1"), null);
+});
+
+test("context limit resolver caches provider metadata", async () => {
+  let configuredCalls = 0;
+  let allCalls = 0;
+  const resolver = new plugin.ContextLimitResolver({
+    client: {
+      config: {
+        providers: async () => {
+          configuredCalls += 1;
+          return {
+            data: {
+              providers: [
+                {
+                  id: "demo",
+                  models: { "model-1": { limit: { context: 4096 } } },
+                },
+              ],
+            },
+          };
+        },
+      },
+      provider: {
+        list: async () => {
+          allCalls += 1;
+          return { data: { all: [] } };
+        },
+      },
+    },
+  });
+
+  assert.equal(
+    await resolver.limitFor({ providerID: "demo", modelID: "model-1" }),
+    4096,
+  );
+  assert.equal(
+    await resolver.limitFor({ providerID: "demo", modelID: "model-1" }),
+    4096,
+  );
+  assert.equal(configuredCalls, 1);
+  assert.equal(allCalls, 1);
+});
+
 test("record builder produces the watcher status contract", () => {
   const timestamps = [20, 30, 40];
   const builder = new plugin.StatusRecordBuilder({
@@ -99,6 +173,99 @@ test("record builder produces the watcher status contract", () => {
   assert.equal(waitingRecord.attention_since, 30);
   assert.equal(waitingRecord.last_transition_ts, 30);
   assert.equal(waitingRecord.updated_at, 40);
+});
+
+test("record builder includes the latest context percentage", () => {
+  const builder = new plugin.StatusRecordBuilder({
+    project: { name: "Demo" },
+    directory: "/work/demo",
+    processId: 123,
+    environment: {},
+    processStartedAt: 10,
+    clock: () => 20,
+  });
+  const info = {
+    sessionID: "session-1",
+    role: "assistant",
+    tokens: {
+      input: 400,
+      output: 50,
+      reasoning: 25,
+      cache: { read: 20, write: 5 },
+    },
+  };
+
+  assert.equal(builder.updateContextUsage(info, 1000), true);
+  assert.deepEqual(
+    builder.build("WORKING", {
+      type: "message.updated",
+      properties: { info },
+    }),
+    {
+      session_id: "session-1",
+      project: "Demo",
+      state: "WORKING",
+      tmux_pane: null,
+      tmux_socket: null,
+      source_pid: 123,
+      process_started_at: 10,
+      directory: "/work/demo",
+      notification_id: null,
+      attention: false,
+      attention_since: null,
+      last_transition_ts: 10,
+      preview: "working",
+      event_type: "message.updated",
+      updated_at: 20,
+      context_tokens: 500,
+      context_limit: 1000,
+      context_percentage: 50,
+    },
+  );
+});
+
+test("reporter writes assistant context usage updates", async () => {
+  const writtenRecords = [];
+  const builder = new plugin.StatusRecordBuilder({
+    project: { name: "Demo" },
+    directory: "/work/demo",
+    processId: 123,
+    processStartedAt: 10,
+    clock: () => 20,
+  });
+  const reporter = new plugin.OpenCodeStatusReporter({
+    stateMachine: new plugin.LifecycleStateMachine(),
+    eventMapper: new plugin.EventStateMapper(),
+    recordBuilder: builder,
+    recordWriter: {
+      write(record) {
+        writtenRecords.push(record);
+      },
+      remove() {},
+    },
+    contextLimitFor: async () => 2000,
+  });
+
+  await reporter.handle({
+    type: "message.updated",
+    properties: {
+      info: {
+        sessionID: "session-1",
+        role: "assistant",
+        providerID: "demo",
+        modelID: "model-1",
+        tokens: {
+          input: 900,
+          output: 50,
+          reasoning: 25,
+          cache: { read: 20, write: 5 },
+        },
+      },
+    },
+  });
+
+  assert.equal(writtenRecords.length, 1);
+  assert.equal(writtenRecords[0].context_percentage, 50);
 });
 
 test("permission records include the requested operation in their preview", () => {
