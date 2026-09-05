@@ -110,6 +110,21 @@ The bridge writes per-process status records under `$XDG_RUNTIME_DIR`, or
 `~/.cache` when that variable is not set. The widget does not scrape terminal
 output or access OpenCode's private storage.
 
+## Watcher Architecture
+
+The watcher is organized as a small Python package under `bin/opencode_watch`:
+
+- `domain.py`: session models and lifecycle state rules.
+- `sources.py`: Linux `/proc` and runtime status-file adapters.
+- `snapshots.py`: process collection and the QML snapshot contract.
+- `focus.py`: tmux, Hyprland, and focus-target adapters.
+- `cycling.py`: session selection and persistent focus cycling.
+- `cli.py`: dependency composition and command-line behavior.
+
+The `bin/opencode-watch` executable remains the only runtime entry point. Each
+adapter is injected through a small protocol, so collection and focus policy can
+be tested without a live desktop.
+
 ## Tests
 
 Run the watcher and bridge tests from the repository root:
