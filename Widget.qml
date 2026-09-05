@@ -15,9 +15,10 @@ Panel {
 
   readonly property color foreground: bar ? bar.barForeground : Color.foreground
   readonly property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.45)
-  readonly property color responseColor: "#d6a84f"
-  readonly property color permissionColor: Color.urgent
-  readonly property color idleColor: Color.accent
+  readonly property color workingColor: "#3b82f6"
+  readonly property color responseColor: "#f97316"
+  readonly property color permissionColor: "#ef4444"
+  readonly property color idleColor: "#22c55e"
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string watcher: Qt.resolvedUrl("bin/opencode-watch").toString().replace(/^file:\/\//, "")
   readonly property var emptyState: ({
@@ -47,9 +48,8 @@ Panel {
 
   function countColor(bucket, count) {
     if (!coloredCounts) return count > 0 ? foreground : dim
-    if (count <= 0) return dim
     if (bucket === "all") return foreground
-    if (bucket === "working") return Color.accent
+    if (bucket === "working") return workingColor
     if (bucket === "response") return responseColor
     if (bucket === "permission") return permissionColor
     if (bucket === "idle") return idleColor
@@ -79,7 +79,7 @@ Panel {
     if (status === "WAITING") return responseColor
     if (status === "NEEDS_APPROVAL") return permissionColor
     if (status === "IDLE") return idleColor
-    if (status === "WORKING") return Color.accent
+    if (status === "WORKING") return workingColor
     return dim
   }
 
@@ -112,16 +112,7 @@ Panel {
     return result.filter(function(session) { return bucketFor(session) === filter })
   }
 
-  function bucketSessions(bucket) {
-    return sessions.filter(function(session) { return bucketFor(session) === bucket })
-  }
-
   function openBucket(bucket) {
-    var matches = bucketSessions(bucket)
-    if (matches.length === 1) {
-      focusSession(matches[0].session_id)
-      return
-    }
     filter = bucket
     expandedSessionId = ""
     cursor = 0
@@ -130,6 +121,7 @@ Panel {
 
   function openAll() {
     clearFilter()
+    expandedSessionId = ""
     root.toggle()
   }
 
@@ -171,6 +163,7 @@ Panel {
   }
 
   function previewFor(session) {
+    if (session.state === "IDLE") return statusLabel(session.state)
     if (session.preview) return String(session.preview)
     return statusLabel(session.state)
   }
