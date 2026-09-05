@@ -790,7 +790,7 @@ def focus_candidates_for_state(
         for session in sessions
         if isinstance(session, Mapping)
         and session.get("state") == wanted_state
-        and (wanted_state == "WORKING" or session.get("attention"))
+        and (wanted_state in ("WORKING", "IDLE") or session.get("attention"))
     ]
 
     def attention_time(session: Mapping[str, Any]) -> float:

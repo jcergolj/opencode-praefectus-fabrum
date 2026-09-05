@@ -29,6 +29,7 @@ Panel {
   property var liveState: null
   property string filter: ""
   property string expandedSessionId: ""
+  property bool settingsOpen: false
   property int cursor: 0
   property double nowMs: Date.now()
 
@@ -41,6 +42,13 @@ Panel {
   readonly property var state: liveState || emptyState
   readonly property var counts: state.counts || emptyState.counts
   readonly property var sessions: state.sessions || []
+
+  function setColoredCounts(value) {
+    var next = Object.assign({}, root.settings, { coloredCounts: value })
+    root.settings = next
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, next)
+  }
 
   function countFor(bucket) {
     return Number(counts[bucket] || 0)
@@ -488,6 +496,52 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             topPadding: Style.space(12)
+          }
+
+          Button {
+            width: parent.width
+            text: root.settingsOpen ? "Hide settings" : "Settings"
+            selected: root.settingsOpen
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            fontSize: Style.font.bodySmall
+            onClicked: root.settingsOpen = !root.settingsOpen
+          }
+
+          Column {
+            visible: root.settingsOpen
+            width: parent.width
+            spacing: Style.space(6)
+
+            Text {
+              width: parent.width
+              text: "Counter numbers"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Row {
+              spacing: Style.space(6)
+
+              Button {
+                text: "Colored"
+                selected: root.coloredCounts
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.caption
+                onClicked: root.setColoredCounts(true)
+              }
+
+              Button {
+                text: "White"
+                selected: !root.coloredCounts
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.caption
+                onClicked: root.setColoredCounts(false)
+              }
+            }
           }
         }
       }

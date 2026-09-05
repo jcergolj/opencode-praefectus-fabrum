@@ -650,6 +650,35 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertEqual(focus.calls, [])
 
+    def test_focus_state_selects_idle_session_without_attention(self):
+        focus = FakeFocusService(True)
+        snapshot = {
+            "sessions": [
+                {
+                    "session_id": "idle-session",
+                    "source_pid": 101,
+                    "state": "IDLE",
+                    "attention": False,
+                    "last_transition_ts": 100,
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(
+                watch,
+                "FOCUS_CYCLE_STATE_FILE",
+                str(Path(directory) / "focus.json"),
+            ):
+                result = watch.main(
+                    ["--focus-state", "idle"],
+                    snapshot_source=SimpleNamespace(snapshot=lambda: snapshot),
+                    focus_service=focus,
+                )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(focus.calls, [101])
+
     def test_focus_state_cycles_across_repeated_commands(self):
         focus = FakeFocusService(True)
         snapshot = {
