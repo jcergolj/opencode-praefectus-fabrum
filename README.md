@@ -47,6 +47,8 @@ bind = SUPER ALT, W, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/
 bind = SUPER ALT, R, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-state response
 bind = SUPER ALT, P, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-state permission
 bind = SUPER ALT, I, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-state idle
+bind = SUPER ALT, TAB, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-next
+bind = SUPER ALT SHIFT, TAB, exec, ~/.config/omarchy/plugins/opencode.praefectus-fabrum/bin/opencode-watch --focus-previous
 ```
 
 The shortcuts are:
@@ -56,11 +58,14 @@ SUPER + ALT + W  focus a working session
 SUPER + ALT + R  focus a session waiting for a response
 SUPER + ALT + P  focus a session waiting for permission
 SUPER + ALT + I  focus an idle session
+SUPER + ALT + TAB          focus the next session, regardless of state
+SUPER + ALT + SHIFT + TAB  focus the previous session, regardless of state
 ```
 
-The first press focuses the first matching session. Press the same shortcut
-again to cycle to the next matching session. Reload Hyprland after adding the
-bindings:
+Each state shortcut starts with the first matching session and repeated presses
+cycle forward. `SUPER + ALT + TAB` starts with the first tracked session, while
+`SUPER + ALT + SHIFT + TAB` starts with the last. Both shortcuts wrap around
+and include sessions in every state. Reload Hyprland after adding the bindings:
 
 ```bash
 hyprctl reload

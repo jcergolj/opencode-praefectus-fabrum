@@ -466,6 +466,80 @@ class FocusCycleStoreTests(unittest.TestCase):
 
         self.assertEqual(focused_targets, [101, 202, 101])
 
+    def test_all_sessions_are_candidates_regardless_of_state(self):
+        snapshot = {
+            "sessions": [
+                {
+                    "session_id": "working",
+                    "source_pid": 101,
+                    "state": "WORKING",
+                    "attention": False,
+                },
+                {
+                    "session_id": "response",
+                    "source_pid": 202,
+                    "state": "WAITING",
+                    "attention": False,
+                },
+                {
+                    "session_id": "permission",
+                    "source_pid": 303,
+                    "state": "NEEDS_APPROVAL",
+                    "attention": False,
+                },
+                {
+                    "session_id": "idle",
+                    "source_pid": 404,
+                    "state": "IDLE",
+                    "attention": False,
+                },
+            ]
+        }
+
+        self.assertEqual(
+            [
+                session["source_pid"]
+                for session in watch.focus_candidates_for_bucket(
+                    snapshot, watch.ALL_SESSIONS_BUCKET
+                )
+            ],
+            [101, 202, 303, 404],
+        )
+
+    def test_previous_direction_starts_at_the_last_session_and_wraps(self):
+        snapshot = {
+            "sessions": [
+                {"session_id": "first", "source_pid": 101},
+                {"session_id": "second", "source_pid": 202},
+            ]
+        }
+        focused_targets = []
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = watch.FocusCycleStore(Path(directory) / "focus.json")
+            focus_session = (
+                lambda session_target: focused_targets.append(session_target) or True
+            )
+
+            self.assertTrue(
+                store.focus(
+                    snapshot,
+                    watch.ALL_SESSIONS_BUCKET,
+                    focus_session,
+                    direction=-1,
+                )
+            )
+            self.assertTrue(
+                store.focus(
+                    snapshot,
+                    watch.ALL_SESSIONS_BUCKET,
+                    focus_session,
+                    direction=-1,
+                )
+            )
+
+        self.assertEqual(focused_targets, [202, 101])
+
 
 class TmuxClientTests(unittest.TestCase):
     def test_focus_switches_the_visible_client_to_the_matching_pane(self):
@@ -732,6 +806,64 @@ class CommandLineTests(unittest.TestCase):
                 )
 
         self.assertEqual(focus.focus_calls, [101, 202])
+
+    def test_focus_next_and_previous_cycle_all_session_states(self):
+        focus = FakeFocusService(True)
+        snapshot = {
+            "sessions": [
+                {
+                    "session_id": "working",
+                    "source_pid": 101,
+                    "state": "WORKING",
+                    "attention": False,
+                },
+                {
+                    "session_id": "response",
+                    "source_pid": 202,
+                    "state": "WAITING",
+                    "attention": False,
+                },
+                {
+                    "session_id": "permission",
+                    "source_pid": 303,
+                    "state": "NEEDS_APPROVAL",
+                    "attention": False,
+                },
+                {
+                    "session_id": "idle",
+                    "source_pid": 404,
+                    "state": "IDLE",
+                    "attention": False,
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(
+                watch,
+                "FOCUS_CYCLE_STATE_FILE",
+                str(Path(directory) / "focus.json"),
+            ):
+                for _ in range(4):
+                    self.assertEqual(
+                        watch.main(
+                            ["--focus-next"],
+                            snapshot_source=SimpleNamespace(snapshot=lambda: snapshot),
+                            focus_service=focus,
+                        ),
+                        0,
+                    )
+                for _ in range(2):
+                    self.assertEqual(
+                        watch.main(
+                            ["--focus-previous"],
+                            snapshot_source=SimpleNamespace(snapshot=lambda: snapshot),
+                            focus_service=focus,
+                        ),
+                        0,
+                    )
+
+        self.assertEqual(focus.focus_calls, [101, 202, 303, 404, 303, 202])
 
 
 if __name__ == "__main__":

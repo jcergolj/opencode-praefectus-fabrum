@@ -53,6 +53,7 @@ FOCUS_STATE_ALIASES = {
     "permission": "NEEDS_APPROVAL",
     "idle": "IDLE",
 }
+ALL_SESSIONS_BUCKET = "all"
 DEFAULT_PREVIEWS = {
     "WORKING": "working",
     "WAITING": "waiting for response",
@@ -814,14 +815,21 @@ def session_identity(session_record: Mapping[str, Any]) -> str:
     return ""
 
 
-def focus_candidates_for_state(
+def focus_candidates_for_bucket(
     snapshot: Mapping[str, Any], requested_bucket: str
 ) -> List[Mapping[str, Any]]:
-    target_status = FOCUS_STATE_ALIASES[requested_bucket]
     session_records = snapshot.get("sessions", [])
     if not isinstance(session_records, list):
         return []
 
+    if requested_bucket == ALL_SESSIONS_BUCKET:
+        return [
+            session_record
+            for session_record in session_records
+            if isinstance(session_record, Mapping) and session_identity(session_record)
+        ]
+
+    target_status = FOCUS_STATE_ALIASES[requested_bucket]
     candidates = [
         session_record
         for session_record in session_records
@@ -854,35 +862,65 @@ def focus_candidates_for_state(
     return candidates
 
 
+def focus_candidates_for_state(
+    snapshot: Mapping[str, Any], requested_bucket: str
+) -> List[Mapping[str, Any]]:
+    return focus_candidates_for_bucket(snapshot, requested_bucket)
+
+
+def focus_session_for_bucket(
+    snapshot: Mapping[str, Any],
+    requested_bucket: str,
+    previous_identity: Optional[str] = None,
+    direction: int = 1,
+) -> Optional[Mapping[str, Any]]:
+    candidates = focus_candidates_for_bucket(snapshot, requested_bucket)
+    if not candidates:
+        return None
+
+    selected_index = len(candidates) - 1 if direction < 0 else 0
+    if previous_identity is not None:
+        for index, candidate in enumerate(candidates):
+            if session_identity(candidate) == previous_identity:
+                selected_index = (index + direction) % len(candidates)
+                break
+    return candidates[selected_index]
+
+
 def focus_session_for_state(
     snapshot: Mapping[str, Any],
     requested_bucket: str,
     previous_identity: Optional[str] = None,
+    direction: int = 1,
 ) -> Optional[Mapping[str, Any]]:
-    candidates = focus_candidates_for_state(snapshot, requested_bucket)
-    if not candidates:
-        return None
+    return focus_session_for_bucket(
+        snapshot, requested_bucket, previous_identity, direction
+    )
 
-    selected_index = 0
-    if previous_identity is not None:
-        for index, candidate in enumerate(candidates):
-            if session_identity(candidate) == previous_identity:
-                selected_index = (index + 1) % len(candidates)
-                break
-    return candidates[selected_index]
+
+def focus_target_for_bucket(
+    snapshot: Mapping[str, Any],
+    requested_bucket: str,
+    previous_identity: Optional[str] = None,
+    direction: int = 1,
+) -> Optional[Any]:
+    selected_session = focus_session_for_bucket(
+        snapshot, requested_bucket, previous_identity, direction
+    )
+    if selected_session is None:
+        return None
+    return selected_session.get("source_pid") or selected_session.get("session_id")
 
 
 def focus_target_for_state(
     snapshot: Mapping[str, Any],
     requested_bucket: str,
     previous_identity: Optional[str] = None,
+    direction: int = 1,
 ) -> Optional[Any]:
-    selected_session = focus_session_for_state(
-        snapshot, requested_bucket, previous_identity
+    return focus_target_for_bucket(
+        snapshot, requested_bucket, previous_identity, direction
     )
-    if selected_session is None:
-        return None
-    return selected_session.get("source_pid") or selected_session.get("session_id")
 
 
 class FocusCycleStore:
@@ -944,10 +982,14 @@ class FocusCycleStore:
         snapshot: Mapping[str, Any],
         requested_bucket: str,
         focus_session: Callable[[Any], bool],
+        direction: int,
     ) -> bool:
         cycle_state = self._read()
-        selected_session = focus_session_for_state(
-            snapshot, requested_bucket, cycle_state.get(requested_bucket)
+        selected_session = focus_session_for_bucket(
+            snapshot,
+            requested_bucket,
+            cycle_state.get(requested_bucket),
+            direction,
         )
         if selected_session is None:
             cycle_state.pop(requested_bucket, None)
@@ -983,16 +1025,19 @@ class FocusCycleStore:
         snapshot: Mapping[str, Any],
         requested_bucket: str,
         focus_session: Callable[[Any], bool],
+        direction: int = 1,
     ) -> bool:
         try:
             with self._lock():
                 return self._focus_locked(
-                    snapshot, requested_bucket, focus_session
+                    snapshot, requested_bucket, focus_session, direction
                 )
         except OSError:
             # The runtime directory may be unavailable during shutdown. Keep
             # the shortcut useful by focusing the first match without cycling.
-            session_target = focus_target_for_state(snapshot, requested_bucket)
+            session_target = focus_target_for_bucket(
+                snapshot, requested_bucket, direction=direction
+            )
             if session_target is None:
                 return False
             try:
@@ -1059,6 +1104,9 @@ def main(
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--focus")
     parser.add_argument("--focus-state", choices=tuple(FOCUS_STATE_ALIASES))
+    focus_direction = parser.add_mutually_exclusive_group()
+    focus_direction.add_argument("--focus-next", action="store_true")
+    focus_direction.add_argument("--focus-previous", action="store_true")
     arguments = parser.parse_args(argv)
 
     if snapshot_source is None or focus_service is None:
@@ -1073,6 +1121,14 @@ def main(
     if arguments.focus_state is not None:
         return 0 if FocusCycleStore(FOCUS_CYCLE_STATE_FILE).focus(
             snapshot_source.snapshot(), arguments.focus_state, focus_service.focus
+        ) else 1
+    if arguments.focus_next or arguments.focus_previous:
+        direction = -1 if arguments.focus_previous else 1
+        return 0 if FocusCycleStore(FOCUS_CYCLE_STATE_FILE).focus(
+            snapshot_source.snapshot(),
+            ALL_SESSIONS_BUCKET,
+            focus_service.focus,
+            direction=direction,
         ) else 1
 
     return SnapshotStreamer(
