@@ -114,6 +114,11 @@ The bridge writes per-process status records under `$XDG_RUNTIME_DIR`, or
 `~/.cache` when that variable is not set. The widget does not scrape terminal
 output or access OpenCode's private storage.
 
+Status records are matched to live processes using exact Linux process start
+ticks, avoiding differences between JavaScript and kernel epoch estimates.
+When ticks are unavailable (including records from older bridges), the watcher
+retains its five-second process-start timestamp tolerance.
+
 ## Watcher Architecture
 
 The watcher is organized as a small Python package under `bin/opencode_watch`:

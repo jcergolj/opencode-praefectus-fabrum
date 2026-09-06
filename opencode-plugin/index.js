@@ -15,6 +15,21 @@ const runtimeDir =
 const statusDir = path.join(runtimeDir, "opencode-praefectus-fabrum");
 const defaultProcessStartedAt = Date.now() / 1000 - process.uptime();
 
+function readProcessStartTicks(fileSystem = fs) {
+  try {
+    const stat = fileSystem.readFileSync(`/proc/${process.pid}/stat`, "utf8");
+    // The comm field can contain spaces and parentheses; starttime is field 22.
+    const closingParen = stat.lastIndexOf(")");
+    if (closingParen === -1) return null;
+    const field = stat.slice(closingParen + 1).trim().split(/\s+/)[19];
+    if (!/^\d+$/.test(field || "")) return null;
+    const ticks = Number(field);
+    return Number.isSafeInteger(ticks) ? ticks : null;
+  } catch {
+    return null;
+  }
+}
+
 const SessionStatus = Object.freeze({
   IDLE: "IDLE",
   WORKING: "WORKING",
@@ -274,6 +289,7 @@ class StatusRecordBuilder {
     processId = process.pid,
     environment = process.env,
     processStartedAt = defaultProcessStartedAt,
+    processStartTicks = null,
     clock = () => Date.now() / 1000,
   }) {
     this.project =
@@ -285,6 +301,7 @@ class StatusRecordBuilder {
     this.processId = processId;
     this.environment = environment;
     this.processStartedAt = processStartedAt;
+    this.processStartTicks = processStartTicks;
     this.clock = clock;
     this.sessionId = null;
     this.lastTransitionAt = processStartedAt;
@@ -348,6 +365,9 @@ class StatusRecordBuilder {
       tmux_socket: this.environment.TMUX || null,
       source_pid: this.processId,
       process_started_at: this.processStartedAt,
+      ...(this.processStartTicks === null
+        ? {}
+        : { process_start_ticks: this.processStartTicks }),
       directory: this.directory,
       notification_id: null,
       attention: requiresAttention,
@@ -576,6 +596,7 @@ async function server({ project, directory, client }) {
       project,
       directory,
       processStartedAt: defaultProcessStartedAt,
+      processStartTicks: readProcessStartTicks(),
     }),
     recordWriter: new AtomicStatusRecordWriter({
       directory: statusDir,
@@ -602,6 +623,7 @@ export {
   TransitionPolicy,
   contextLimitFor,
   contextTokensFor,
+  readProcessStartTicks,
 };
 
 export default {

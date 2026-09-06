@@ -50,6 +50,7 @@ class ProcessInfo:
     pid: int
     directory: str
     started_at: float
+    start_ticks: Optional[int] = None
 
 
 @dataclass(frozen=True)

@@ -92,9 +92,12 @@ class ProcessSourceTests(unittest.TestCase):
             self.assertEqual(source.opencode_pids(), {101})
             self.assertEqual(
                 source.inspect(101),
-                watch.ProcessInfo(101, str(project), 1002.0),
+                watch.ProcessInfo(101, str(project), 1002.0, 200),
             )
             self.assertEqual(source.ancestors(101), [101])
+
+            (process_dir / "stat").write_text("malformed")
+            self.assertIsNone(source.inspect(101).start_ticks)
 
 
 if __name__ == "__main__":

@@ -134,6 +134,12 @@ class SessionCollector:
         process: ProcessInfo,
         status_record: Mapping[str, Any],
     ) -> bool:
+        recorded_start_ticks = status_record.get("process_start_ticks")
+        if recorded_start_ticks is not None and process.start_ticks is not None:
+            return (
+                type(recorded_start_ticks) is int
+                and recorded_start_ticks == process.start_ticks
+            )
         recorded_process_started_at = status_record.get("process_started_at")
         if recorded_process_started_at is None:
             return True

@@ -159,6 +159,11 @@ class ProcProcessSource:
         except (OSError, ValueError):
             return None
 
-        _, process_start_ticks = process_stat(pid, self.proc_root)
+        parent_pid, process_start_ticks = process_stat(pid, self.proc_root)
         process_started_at = self.boot_time + process_start_ticks / self.clock_ticks
-        return ProcessInfo(pid, directory, process_started_at)
+        return ProcessInfo(
+            pid,
+            directory,
+            process_started_at,
+            process_start_ticks if parent_pid is not None else None,
+        )

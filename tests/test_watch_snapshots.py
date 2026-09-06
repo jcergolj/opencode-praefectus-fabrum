@@ -4,6 +4,55 @@ from watch_test_support import FakeAttentionSource, FakeProcessSource, FakeTermi
 
 
 class SnapshotServiceTests(unittest.TestCase):
+    def test_exact_start_ticks_accept_status_despite_epoch_mismatch(self):
+        collector = watch.SessionCollector(
+            FakeProcessSource(
+                {101: watch.ProcessInfo(101, "/work/alpha", 100, 12345)},
+                {101: [101]},
+            ),
+            FakeAttentionSource({101: {
+                "state": "WORKING",
+                "process_started_at": 160,
+                "process_start_ticks": 12345,
+            }}),
+            FakeTerminal(),
+        )
+
+        self.assertEqual(collector.collect()[0].state, "WORKING")
+
+    def test_mismatched_or_malformed_ticks_reject_status_despite_matching_epoch(self):
+        for ticks in (12346, "12345", 12345.5, True, [], {}):
+            with self.subTest(ticks=ticks):
+                collector = watch.SessionCollector(
+                    FakeProcessSource(
+                        {101: watch.ProcessInfo(101, "/work/alpha", 100, 12345)},
+                        {101: [101]},
+                    ),
+                    FakeAttentionSource({101: {
+                        "state": "WORKING",
+                        "process_started_at": 100,
+                        "process_start_ticks": ticks,
+                    }}),
+                    FakeTerminal(),
+                )
+
+                self.assertEqual(collector.collect()[0].state, "IDLE")
+
+    def test_timestamp_fallback_when_either_side_lacks_ticks(self):
+        for process_ticks, record_ticks in ((12345, None), (None, 12345), (None, None)):
+            for epoch, expected in ((102.2, True), (160, False)):
+                with self.subTest(process_ticks=process_ticks, record_ticks=record_ticks, epoch=epoch):
+                    record = {"process_started_at": epoch}
+                    if record_ticks is not None:
+                        record["process_start_ticks"] = record_ticks
+                    self.assertEqual(
+                        watch.SessionCollector._matches_process(
+                            watch.ProcessInfo(101, "/work/alpha", 100, process_ticks),
+                            record,
+                        ),
+                        expected,
+                    )
+
     def test_new_process_uses_its_first_reported_attention_state(self):
         process_source = FakeProcessSource(
             {101: watch.ProcessInfo(101, "/work/alpha", 100)},

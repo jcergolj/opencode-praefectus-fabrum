@@ -8,6 +8,50 @@ const pluginSource = await readFile(
 );
 const plugin = await import(`data:text/javascript,${encodeURIComponent(pluginSource)}`);
 
+test("process start ticks use field 22 after the last closing parenthesis", () => {
+  for (const ticks of [0, 12345, Number.MAX_SAFE_INTEGER]) {
+    const result = plugin.readProcessStartTicks({
+      readFileSync(filePath, encoding) {
+        assert.equal(filePath, `/proc/${process.pid}/stat`);
+        assert.equal(encoding, "utf8");
+        return `${process.pid} (open (code) worker))\tS 1 ${"0 ".repeat(17)}${ticks} 999\n`;
+      },
+    });
+    assert.equal(result, ticks);
+    const builder = new plugin.StatusRecordBuilder({
+      processId: 123,
+      processStartedAt: 10,
+      processStartTicks: result,
+    });
+    assert.equal(builder.build("WORKING").process_start_ticks, ticks);
+  }
+});
+
+test("unreadable or malformed process stat falls back to timestamp-only records", () => {
+  const prefix = `123 (opencode) S 1 ${"0 ".repeat(17)}`;
+  const stats = [
+    null, "", "123 opencode S 1", "123 (opencode) S 1",
+    ...["-1", "1.5", "12oops", "NaN", "Infinity", "9007199254740993"]
+      .map((ticks) => `${prefix}${ticks}`),
+  ];
+  for (const stat of stats) {
+    const ticks = plugin.readProcessStartTicks({
+      readFileSync() {
+        if (stat === null) throw new Error("proc unavailable");
+        return stat;
+      },
+    });
+    assert.equal(ticks, null);
+    const record = new plugin.StatusRecordBuilder({
+      processId: 123,
+      processStartedAt: 10,
+      processStartTicks: ticks,
+    }).build("WORKING");
+    assert.equal(Object.hasOwn(record, "process_start_ticks"), false);
+    assert.equal(record.process_started_at, 10);
+  }
+});
+
 test("lifecycle state machine enforces the complete transition matrix", () => {
   const sessionStatuses = Object.values(plugin.SessionStatus);
   const transitions = {
