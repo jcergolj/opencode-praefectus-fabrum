@@ -19,7 +19,9 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "coloredCounts": true
+      "coloredCounts": true,
+      "notificationsEnabled": true,
+      "notificationTimeoutSeconds": 10
     },
     "schema": [
       {
@@ -28,6 +30,23 @@
         "label": "Use colored counter numbers",
         "defaultValue": true,
         "description": "Show status colors instead of white counter numbers."
+      },
+      {
+        "key": "notificationsEnabled",
+        "type": "boolean",
+        "label": "Enable session notifications",
+        "defaultValue": true,
+        "description": "Notify when an OpenCode session needs attention or finishes."
+      },
+      {
+        "key": "notificationTimeoutSeconds",
+        "type": "integer",
+        "label": "Notification timeout (seconds)",
+        "min": 8,
+        "max": 30,
+        "step": 1,
+        "defaultValue": 10,
+        "description": "How long a session notification remains visible."
       }
     ]
   }

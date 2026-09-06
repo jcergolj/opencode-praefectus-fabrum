@@ -32,22 +32,46 @@ Panel {
   property bool settingsOpen: false
   property int selectedSessionIndex: 0
   property double currentTimeMs: Date.now()
+  property var previousSessionsByIdentity: ({})
+  property bool hasPreviousSnapshot: false
 
   function setting(settingName, defaultValue) {
     var settingValue = root.settings ? root.settings[settingName] : undefined
     return settingValue === undefined || settingValue === null ? defaultValue : settingValue
   }
 
+  function boundedNotificationTimeout(value) {
+    var timeoutSeconds = Number(value)
+    if (!isFinite(timeoutSeconds)) timeoutSeconds = 10
+    return Math.max(8, Math.min(30, Math.round(timeoutSeconds)))
+  }
+
   readonly property bool coloredCounts: String(setting("coloredCounts", true)) !== "false"
+  readonly property bool notificationsEnabled: String(setting("notificationsEnabled", true)) !== "false"
+  readonly property int notificationTimeoutSeconds: boundedNotificationTimeout(setting("notificationTimeoutSeconds", 10))
+  readonly property int notificationTimeoutMs: notificationTimeoutSeconds * 1000
   readonly property var snapshot: liveSnapshot || emptySnapshot
   readonly property var counts: snapshot.counts || emptySnapshot.counts
   readonly property var sessions: snapshot.sessions || []
 
-  function setColoredCounts(enabled) {
-    var updatedSettings = Object.assign({}, root.settings, { coloredCounts: enabled })
+  function updateSetting(settingName, settingValue) {
+    var updatedSettings = Object.assign({}, root.settings)
+    updatedSettings[settingName] = settingValue
     root.settings = updatedSettings
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
       root.bar.shell.updateEntryInline(root.moduleName, updatedSettings)
+  }
+
+  function setColoredCounts(enabled) {
+    updateSetting("coloredCounts", enabled)
+  }
+
+  function setNotificationsEnabled(enabled) {
+    updateSetting("notificationsEnabled", enabled)
+  }
+
+  function setNotificationTimeout(seconds) {
+    updateSetting("notificationTimeoutSeconds", boundedNotificationTimeout(seconds))
   }
 
   function countFor(statusBucket) {
@@ -141,10 +165,14 @@ Panel {
     selectedSessionIndex = 0
   }
 
-  function focusSession(sessionId) {
-    if (!sessionId) return
-    var selectedSession = sessions.find(function(item) { return item.session_id === sessionId })
-    var focusTarget = selectedSession ? selectedSession.source_pid : sessionId
+  function focusSession(sessionId, sourcePid) {
+    if (!sessionId && (sourcePid === undefined || sourcePid === null || String(sourcePid) === "")) return
+    var selectedSession = sessionId
+      ? sessions.find(function(item) { return item.session_id === sessionId })
+      : null
+    var focusTarget = selectedSession
+      ? selectedSession.source_pid
+      : (sourcePid !== undefined && sourcePid !== null && String(sourcePid) !== "" ? sourcePid : sessionId)
     Quickshell.execDetached([root.watcherPath, "--focus", String(focusTarget)])
     root.close()
   }
@@ -185,14 +213,88 @@ Panel {
     return "context " + Math.round(contextPercentage) + "% used"
   }
 
+  function sessionIdentity(session) {
+    if (!session) return ""
+    if (session.source_pid !== undefined && session.source_pid !== null && String(session.source_pid) !== "")
+      return "pid:" + String(session.source_pid)
+    if (session.session_id !== undefined && session.session_id !== null && String(session.session_id) !== "")
+      return "session:" + String(session.session_id)
+    return ""
+  }
+
+  function sessionsByIdentity(sessionList) {
+    var records = {}
+    for (var index = 0; index < sessionList.length; index++) {
+      var session = sessionList[index]
+      var identity = sessionIdentity(session)
+      if (identity) records[identity] = session
+    }
+    return records
+  }
+
+  function requiresAttention(session) {
+    if (!session) return false
+    return !!session.attention || session.state === "WAITING" || session.state === "NEEDS_APPROVAL"
+  }
+
+  function notificationEvent(previousSession, currentSession) {
+    if (!currentSession) return ""
+    if (requiresAttention(currentSession) && !requiresAttention(previousSession)) return "attention"
+    if (previousSession && previousSession.state === "WORKING" && currentSession.state === "IDLE")
+      return "finished"
+    return ""
+  }
+
+  function notificationSummary(eventType) {
+    return eventType === "attention"
+      ? "OpenCode session needs attention"
+      : "OpenCode session finished"
+  }
+
+  function notificationBody(eventType, session) {
+    var project = String(session.project || "OpenCode")
+    if (eventType !== "attention") return project
+    var preview = String(session.preview || "")
+    if (!preview || preview === statusLabel(session.state)) return project
+    return project + " · " + preview
+  }
+
+  function sendNotification(eventType, session) {
+    if (!notificationsEnabled || !session) return
+    var notificationProcess = desktopNotificationProcess.createObject(root, {
+      targetSessionId: session.session_id === undefined || session.session_id === null ? "" : String(session.session_id),
+      targetSourcePid: session.source_pid === undefined || session.source_pid === null ? "" : String(session.source_pid),
+      notificationSummary: notificationSummary(eventType),
+      notificationBody: notificationBody(eventType, session)
+    })
+    if (!notificationProcess) console.warn("praefectus-fabrum", "could not create notification process")
+  }
+
+  function notifyForTransitions(currentSessions) {
+    if (!hasPreviousSnapshot) return
+    var currentSessionsByIdentity = sessionsByIdentity(currentSessions)
+    for (var identity in currentSessionsByIdentity) {
+      var currentSession = currentSessionsByIdentity[identity]
+      var eventType = notificationEvent(previousSessionsByIdentity[identity], currentSession)
+      if (eventType) sendNotification(eventType, currentSession)
+    }
+    previousSessionsByIdentity = currentSessionsByIdentity
+  }
+
   function parseState(inputText) {
     try {
       var parsedSnapshot = JSON.parse(String(inputText || ""))
       if (parsedSnapshot && typeof parsedSnapshot === "object") {
+        var currentSessions = Array.isArray(parsedSnapshot.sessions) ? parsedSnapshot.sessions : []
         liveSnapshot = parsedSnapshot
         currentTimeMs = Date.now()
         if (selectedSessionIndex >= visibleSessions.length)
           selectedSessionIndex = Math.max(0, visibleSessions.length - 1)
+        if (!hasPreviousSnapshot) {
+          previousSessionsByIdentity = sessionsByIdentity(currentSessions)
+          hasPreviousSnapshot = true
+        }
+        else notifyForTransitions(currentSessions)
       }
     } catch (parseError) {
       console.warn("praefectus-fabrum", "bad state line", parseError)
@@ -208,6 +310,49 @@ Panel {
       onRead: function(outputChunk) {
         if (String(outputChunk).trim() !== "") console.warn("praefectus-fabrum", String(outputChunk).trim())
       }
+    }
+  }
+
+  Component {
+    id: desktopNotificationProcess
+
+    Process {
+      id: notificationProcess
+      property string targetSessionId: ""
+      property string targetSourcePid: ""
+      property string notificationSummary: ""
+      property string notificationBody: ""
+      property bool actionHandled: false
+
+      command: [
+        "notify-send",
+        "--wait",
+        "--transient",
+        "--action=default=Open",
+        "--expire-time",
+        String(root.notificationTimeoutMs),
+        "--app-name",
+        "OpenCode",
+        notificationSummary,
+        notificationBody
+      ]
+      running: true
+
+      stdout: SplitParser {
+        onRead: function(outputChunk) {
+          if (String(outputChunk).trim() !== "default" || notificationProcess.actionHandled) return
+          notificationProcess.actionHandled = true
+          root.focusSession(notificationProcess.targetSessionId, notificationProcess.targetSourcePid)
+        }
+      }
+
+      stderr: SplitParser {
+        onRead: function(outputChunk) {
+          if (String(outputChunk).trim() !== "") console.warn("praefectus-fabrum", String(outputChunk).trim())
+        }
+      }
+
+      onExited: notificationProcess.destroy()
     }
   }
 
@@ -544,6 +689,42 @@ Panel {
               descriptionSize: Style.font.caption
               foreground: root.foreground
               onClicked: root.setColoredCounts(!root.coloredCounts)
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Session notifications"
+              description: root.notificationsEnabled
+                ? "Notify when a session needs attention or finishes."
+                : "Session notifications are disabled."
+              checked: root.notificationsEnabled
+              fontFamily: root.fontFamily
+              titleSize: Style.font.bodySmall
+              descriptionSize: Style.font.caption
+              foreground: root.foreground
+              onClicked: root.setNotificationsEnabled(!root.notificationsEnabled)
+            }
+
+            NumberField {
+              width: parent.width
+              label: "Notification timeout (seconds)"
+              value: root.notificationTimeoutSeconds
+              from: 8
+              to: 30
+              stepSize: 1
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.bodySmall
+              onModified: root.setNotificationTimeout(value)
+            }
+
+            Text {
+              width: parent.width
+              text: "Choose between 8 and 30 seconds."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
             }
           }
         }

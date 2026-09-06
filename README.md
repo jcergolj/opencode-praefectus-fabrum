@@ -25,8 +25,12 @@ Expand a session row to see its latest context-window percentage when OpenCode
 provides model and token usage metadata.
 
 When the session list is open, expand `Settings` to toggle colored counter
-numbers. Turn the option off to show every counter number in white. The choice
-is saved in the widget configuration.
+numbers and session notifications. Turn colored counters off to show every
+counter number in white. Session notifications are enabled by default and
+appear when a session needs attention or finishes. They close after 10 seconds
+by default; the timeout can be changed between 8 and 30 seconds. Clicking a
+notification focuses its session. These choices are saved in the widget
+configuration.
 
 The widget watches live top-level `opencode` processes. Nested OpenCode
 processes created by subagents are ignored. A new process starts as idle until
