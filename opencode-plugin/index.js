@@ -341,7 +341,7 @@ class StatusRecordBuilder {
     this.lastSessionState = sessionState;
 
     return {
-      session_id: this.updateSessionId(event),
+      session_id: this.updateSessionId(event) || `pid:${this.processId}`,
       project: this.project,
       state: sessionState,
       tmux_pane: this.environment.TMUX_PANE || null,
@@ -436,6 +436,7 @@ class OpenCodeStatusReporter {
     this.resolveContextLimit = resolveContextLimit;
     this.pendingRequests = new Map();
     this.requestSequence = 0;
+    this.hasWrittenRecord = false;
   }
 
   sessionIdFor(event) {
@@ -536,6 +537,7 @@ class OpenCodeStatusReporter {
 
     if (
       stateChanged ||
+      (mappedState && !this.hasWrittenRecord) ||
       event?.type === "session.created" ||
       event?.type === "session.updated" ||
       isPreviewEvent ||
@@ -544,7 +546,19 @@ class OpenCodeStatusReporter {
       this.recordWriter.write(
         this.recordBuilder.build(this.stateMachine.currentState, event),
       );
+      this.hasWrittenRecord = true;
     }
+  }
+
+  async initialize() {
+    if (this.hasWrittenRecord) return;
+    this.recordWriter.write(
+      this.recordBuilder.build(SessionStatus.IDLE, {
+        type: "server.connected",
+        properties: {},
+      }),
+    );
+    this.hasWrittenRecord = true;
   }
 
   async dispose() {
@@ -569,6 +583,7 @@ async function server({ project, directory, client }) {
     }),
     contextLimitFor: (info) => contextLimitResolver.limitFor(info),
   });
+  await reporter.initialize();
 
   return {
     event: async ({ event }) => reporter.handle(event),

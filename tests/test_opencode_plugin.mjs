@@ -175,6 +175,51 @@ test("record builder produces the watcher status contract", () => {
   assert.equal(waitingRecord.updated_at, 40);
 });
 
+test("reporter writes a baseline record before the first session event", async () => {
+  const writtenRecords = [];
+  const builder = new plugin.StatusRecordBuilder({
+    project: { name: "Demo" },
+    directory: "/work/demo",
+    processId: 123,
+    environment: {},
+    processStartedAt: 10,
+    clock: () => 20,
+  });
+  const reporter = new plugin.OpenCodeStatusReporter({
+    stateMachine: new plugin.LifecycleStateMachine(),
+    eventMapper: new plugin.EventStateMapper(),
+    recordBuilder: builder,
+    recordWriter: {
+      write(record) {
+        writtenRecords.push(record);
+      },
+      remove() {},
+    },
+  });
+
+  await reporter.initialize();
+
+  assert.deepEqual(writtenRecords, [
+    {
+      session_id: "pid:123",
+      project: "Demo",
+      state: "IDLE",
+      tmux_pane: null,
+      tmux_socket: null,
+      source_pid: 123,
+      process_started_at: 10,
+      directory: "/work/demo",
+      notification_id: null,
+      attention: false,
+      attention_since: null,
+      last_transition_ts: 10,
+      preview: "idle",
+      event_type: "server.connected",
+      updated_at: 20,
+    },
+  ]);
+});
+
 test("record builder includes the latest context percentage", () => {
   const builder = new plugin.StatusRecordBuilder({
     project: { name: "Demo" },
@@ -266,6 +311,35 @@ test("reporter writes assistant context usage updates", async () => {
 
   assert.equal(writtenRecords.length, 1);
   assert.equal(writtenRecords[0].context_percentage, 50);
+});
+
+test("reporter records an initial idle status from a restored session", async () => {
+  const writtenRecords = [];
+  const reporter = new plugin.OpenCodeStatusReporter({
+    stateMachine: new plugin.LifecycleStateMachine(),
+    eventMapper: new plugin.EventStateMapper(),
+    recordBuilder: {
+      markTransition() {},
+      build(sessionState, event) {
+        return { state: sessionState, eventType: event.type };
+      },
+    },
+    recordWriter: {
+      write(record) {
+        writtenRecords.push(record);
+      },
+      remove() {},
+    },
+  });
+
+  await reporter.handle({
+    type: "session.status",
+    properties: { sessionID: "session-1", status: { type: "idle" } },
+  });
+
+  assert.deepEqual(writtenRecords, [
+    { state: plugin.SessionStatus.IDLE, eventType: "session.status" },
+  ]);
 });
 
 test("permission records include the requested operation in their preview", () => {
